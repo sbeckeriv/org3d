@@ -2,7 +2,9 @@
 
 A local gallery and organiser for 3D print files. Scans a directory of 3MF and STL files, extracts metadata, and serves a searchable web UI with 3D previews.
 
-![gallery screenshot placeholder]
+![Gallery view showing a grid of 3D models with thumbnails, search bar, and format/project filters](screenshots/1.png)
+
+![Detail modal with interactive 3D preview, dimensions, triangle count, file path, Open in Bambu Studio button, and project assignment](screenshots/2.png)
 
 ## Features
 
