@@ -1,0 +1,46 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"><title>org3d — Projects</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.min.js"></script>
+<style>
+:root { --bg:#0f0f13;--surface:#1a1a22;--border:#2a2a38;--accent:#6c63ff;--text:#e0e0f0;--muted:#888; }
+* { box-sizing:border-box;margin:0;padding:0; }
+body { background:var(--bg);color:var(--text);font-family:system-ui,sans-serif; }
+header { padding:.75rem 1.5rem;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:1.25rem; }
+header h1 { font-size:1.1rem;color:var(--accent);letter-spacing:2px;font-weight:700; }
+header a { color:var(--muted);text-decoration:none;font-size:.85rem; }
+header a:hover { color:var(--text); }
+.content { padding:2rem 1.5rem;max-width:700px; }
+h2 { font-size:1rem;margin-bottom:1.25rem;color:var(--muted); }
+.proj-list { display:flex;flex-direction:column;gap:.5rem; }
+.proj-card { background:var(--surface);border:1px solid var(--border);border-radius:8px;padding:.75rem 1rem;display:flex;align-items:center;justify-content:space-between;text-decoration:none;color:var(--text);transition:border-color .2s; }
+.proj-card:hover { border-color:var(--accent); }
+.proj-name { font-weight:600; }
+.proj-count { color:var(--muted);font-size:.85rem; }
+.empty { color:var(--muted);padding:2rem 0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ORG3D</h1>
+  <a href="/">← Gallery</a>
+</header>
+<div class="content">
+  <h2>Projects</h2>
+  {% if projects %}
+  <div class="proj-list">
+    {% for p in projects %}
+    <a class="proj-card" href="/?project={{ p.id }}">
+      <span class="proj-name">{{ p.name }}</span>
+      <span class="proj-count">{{ p.model_count }} {% if p.model_count == 1 %}model{% else %}models{% endif %}</span>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p class="empty">No projects yet. Open a model and assign it to a project.</p>
+  {% endif %}
+</div>
+</body>
+</html>

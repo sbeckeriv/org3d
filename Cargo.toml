@@ -1,0 +1,36 @@
+[package]
+name = "org3d"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+# web server
+axum = "0.8"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["fs"] }
+
+# database
+rusqlite = { version = "0.32", features = ["bundled"] }
+
+# 3d file parsing
+zip = "2"
+roxmltree = "0.20"
+walkdir = "2"
+
+# templating
+minijinja = { version = "2", features = ["loader"] }
+
+# serialization
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# utilities
+anyhow = "1"
+indicatif = "0.17"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap = { version = "4", features = ["derive"] }
+
+[dev-dependencies]
+tower = { version = "0.5", features = ["util"] }
+reqwest = { version = "0.12", features = ["json"] }

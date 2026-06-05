@@ -1,0 +1,5 @@
+/target
+/thumbs
+org3d.db*
+.DS_Store
+.claude/

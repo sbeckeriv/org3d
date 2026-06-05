@@ -1,0 +1,9 @@
+<div id="pagination" class="pagination" hx-swap-oob="true">
+  {% if prev_page is not none %}
+  <a href="/?q={{ q }}&format={{ format }}&project={{ project | default("") }}&page={{ prev_page }}">← Prev</a>
+  {% endif %}
+  <span class="info">{{ total }} models</span>
+  {% if total > (page + 1) * 48 %}
+  <a href="/?q={{ q }}&format={{ format }}&project={{ project | default("") }}&page={{ next_page }}">Next →</a>
+  {% endif %}
+</div>

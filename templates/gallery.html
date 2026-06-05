@@ -1,0 +1,296 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>org3d</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<style>
+:root {
+  --bg: #0f0f13; --surface: #1a1a22; --border: #2a2a38;
+  --accent: #6c63ff; --text: #e0e0f0; --muted: #888;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; }
+
+header { padding: .75rem 1.5rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap; }
+header h1 { font-size: 1.1rem; color: var(--accent); letter-spacing: 2px; font-weight: 700; flex-shrink: 0; }
+header a { color: var(--muted); text-decoration: none; font-size: .85rem; }
+header a:hover { color: var(--text); }
+.count { color: var(--muted); font-size: .85rem; margin-left: auto; }
+
+.filters { display: flex; flex-wrap: wrap; gap: .5rem; padding: .75rem 1.5rem; border-bottom: 1px solid var(--border); align-items: center; }
+.filters input, .filters select {
+  background: var(--surface); border: 1px solid var(--border); color: var(--text);
+  padding: .4rem .7rem; border-radius: 6px; font-size: .9rem;
+}
+.filters input[type="search"] { flex: 1; min-width: 240px; }
+
+.gallery { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 1rem; padding: 1.5rem; }
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; cursor: pointer; transition: border-color .2s, transform .15s; }
+.card:hover { border-color: var(--accent); transform: translateY(-2px); }
+.card-thumb { width: 100%; aspect-ratio: 1; object-fit: cover; display: block; background: #111; }
+.card-thumb.placeholder { display: flex; align-items: center; justify-content: center; font-size: 2.5rem; color: var(--border); aspect-ratio: 1; }
+.card-body { padding: .55rem .75rem; }
+.card-title { font-size: .82rem; font-weight: 600; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-meta { font-size: .72rem; color: var(--muted); margin-top: .2rem; }
+.badge { display: inline-block; font-size: .62rem; padding: .12rem .35rem; border-radius: 4px; margin-right: .25rem; }
+.badge.3mf { background: #1a2a1a; color: #80c080; }
+.badge.stl  { background: #2a1a1a; color: #c08080; }
+.badge.proj { background: #1a1a2a; color: #8080c0; }
+.empty { color: var(--muted); padding: 2rem; grid-column: 1 / -1; }
+
+.pagination { display: flex; gap: .5rem; padding: 1rem 1.5rem; align-items: center; }
+.pagination a { background: var(--surface); border: 1px solid var(--border); color: var(--text); padding: .35rem .75rem; border-radius: 6px; text-decoration: none; font-size: .85rem; }
+.pagination a:hover { border-color: var(--accent); }
+.pagination .info { color: var(--muted); font-size: .82rem; }
+
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,.85); z-index: 100; align-items: flex-start; justify-content: center; padding: 2rem 1rem; overflow-y: auto; }
+.modal-overlay.open { display: flex; }
+.modal { background: var(--surface); border: 1px solid var(--border); border-radius: 14px; width: 100%; max-width: 900px; padding: 1.5rem; position: relative; }
+.modal-close { position: absolute; top: 1rem; right: 1rem; background: var(--border); border: none; color: var(--text); border-radius: 50%; width: 2rem; height: 2rem; cursor: pointer; font-size: 1rem; line-height: 2rem; text-align: center; }
+.modal-close:hover { background: var(--accent); }
+#viewer-wrap { width: 100%; height: 360px; border-radius: 8px; background: #111; margin-bottom: 1rem; overflow: hidden; position: relative; }
+#viewer-canvas { width: 100%; height: 100%; display: block; }
+#viewer-img { width: 100%; height: 100%; object-fit: contain; display: none; }
+#detail-content { font-size: .9rem; line-height: 1.6; }
+#detail-content p { margin: .3rem 0; }
+#detail-content strong { color: var(--muted); font-weight: 500; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ORG3D</h1>
+  <a href="/projects">Projects</a>
+  <span class="count">{{ total }} models</span>
+</header>
+
+<div class="filters">
+  <input type="search" name="q" value="{{ q }}"
+    placeholder="Search titles, filenames, folders, designers…"
+    hx-get="/search" hx-trigger="input changed delay:250ms"
+    hx-target="#gallery" hx-include=".filters select">
+  <select name="format" hx-get="/search" hx-trigger="change"
+    hx-target="#gallery" hx-include=".filters input, .filters select">
+    <option value="">All formats</option>
+    <option value="3MF"{% if format == "3MF" %} selected{% endif %}>3MF</option>
+    <option value="STL"{% if format == "STL" %} selected{% endif %}>STL</option>
+  </select>
+  <select name="project" hx-get="/search" hx-trigger="change"
+    hx-target="#gallery" hx-include=".filters input, .filters select">
+    <option value="">All projects</option>
+    {% for p in projects %}
+    <option value="{{ p.id }}"{% if project == p.id %} selected{% endif %}>{{ p.name }}</option>
+    {% endfor %}
+  </select>
+</div>
+
+<div id="gallery" class="gallery">
+  {% include "cards.html" %}
+</div>
+
+{% include "pagination.html" %}
+
+<div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+  <div class="modal">
+    <button class="modal-close" onclick="closeModal()">✕</button>
+    <div id="viewer-wrap">
+      <canvas id="viewer-canvas"></canvas>
+      <img id="viewer-img" alt="preview">
+    </div>
+    <div id="detail-content"></div>
+  </div>
+</div>
+
+<script>
+var currentId = null;
+var hasThumbnail = false;
+
+function openModel(id, fmt, thumb) {
+  currentId = id;
+  hasThumbnail = !!thumb;
+  document.getElementById('modal').classList.add('open');
+  htmx.ajax('GET', '/model/' + id, {target: '#detail-content'});
+  initViewer(id, fmt, thumb);
+}
+
+function closeModal() {
+  document.getElementById('modal').classList.remove('open');
+  stopViewer();
+  document.getElementById('detail-content').innerHTML = '';
+  currentId = null;
+}
+document.addEventListener('keydown', function(e) { if (e.key === 'Escape') closeModal(); });
+
+// ── Viewer ────────────────────────────────────────────────────────────────────
+var renderer, scene, camera, animId;
+
+function initViewer(id, fmt, thumb) {
+  var canvas  = document.getElementById('viewer-canvas');
+  var img     = document.getElementById('viewer-img');
+
+  // For 3MF: show the thumbnail image AND offer 3D via the /stl endpoint
+  // For STL: load 3D directly (no embedded thumbnail)
+  // Either way, load /stl/<id> which serves real STL or converts 3MF mesh → STL
+  canvas.style.display = 'block';
+  img.style.display    = 'none';
+  img.src = '';
+
+  loadStlViewer('/stl/' + id, id, !hasThumbnail);
+}
+
+function loadStlViewer(url, id, captureThumb) {
+  var canvas = document.getElementById('viewer-canvas');
+  renderer = new THREE.WebGLRenderer({canvas: canvas, antialias: true});
+  var w = canvas.clientWidth || 860, h = canvas.clientHeight || 360;
+  renderer.setSize(w, h, false);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+  renderer.setClearColor(0x111111);
+
+  scene  = new THREE.Scene();
+  camera = new THREE.PerspectiveCamera(45, w / h, 0.01, 1e7);
+  scene.add(new THREE.AmbientLight(0xffffff, 0.5));
+  var dir = new THREE.DirectionalLight(0xffffff, 0.9);
+  dir.position.set(1, 2, 2);
+  scene.add(dir);
+
+  fetch(url)
+    .then(function(r) {
+      if (!r.ok) throw new Error('server returned ' + r.status);
+      return r.arrayBuffer();
+    })
+    .then(function(buf) {
+      var geo = parseStlBuffer(buf);
+      geo.computeVertexNormals();
+      geo.center();
+
+      var bbox = new THREE.Box3().setFromBufferAttribute(geo.attributes.position);
+      var size = new THREE.Vector3(); bbox.getSize(size);
+      var maxDim = Math.max(size.x, size.y, size.z) || 1;
+
+      // Pick camera angle based on shape:
+      // flat/plate layouts (height << width) → overhead isometric
+      // tall/single objects               → front-ish view
+      var flatness = size.z / (Math.max(size.x, size.y) || 1);
+      var dist = maxDim * 1.6;
+      if (flatness < 0.25) {
+        // Collection spread on a plate — look down at ~45°
+        camera.position.set(dist * 0.7, dist * 0.9, dist * 0.7);
+      } else {
+        // Single tall object — slight front elevation
+        camera.position.set(dist * 0.4, dist * 0.3, dist * 1.4);
+      }
+      camera.near = maxDim * 0.001; camera.far = maxDim * 200;
+      camera.updateProjectionMatrix();
+      camera.lookAt(0, 0, 0);
+
+      var mat  = new THREE.MeshPhongMaterial({color: 0x6c63ff, specular: 0x222222, shininess: 60});
+      var mesh = new THREE.Mesh(geo, mat);
+      scene.add(mesh);
+
+      var dragging = false, lx = 0, ly = 0;
+      canvas.addEventListener('mousedown', function(e) { dragging = true; lx = e.clientX; ly = e.clientY; });
+      window.addEventListener('mouseup',   function()  { dragging = false; });
+      canvas.addEventListener('mousemove', function(e) {
+        if (!dragging) return;
+        mesh.rotation.y += (e.clientX - lx) * 0.01;
+        mesh.rotation.x += (e.clientY - ly) * 0.01;
+        lx = e.clientX; ly = e.clientY;
+      });
+      canvas.addEventListener('wheel', function(e) {
+        e.preventDefault();
+        camera.position.multiplyScalar(1 + e.deltaY * 0.001);
+      }, {passive: false});
+
+      (function animate() {
+        animId = requestAnimationFrame(animate);
+        renderer.render(scene, camera);
+      })();
+
+      // Capture thumbnail after first stable render (only if card has no thumb yet)
+      if (captureThumb && id) {
+        setTimeout(function() {
+          if (!renderer) return;
+          renderer.render(scene, camera);
+          canvas.toBlob(function(blob) {
+            if (!blob) return;
+            fetch('/api/model/' + id + '/thumbnail', {
+              method: 'POST',
+              headers: {'Content-Type': 'image/png'},
+              body: blob
+            }).then(function(r) {
+              if (!r.ok) return;
+              // Update card thumbnail live
+              var img = document.querySelector('.card[data-id="' + id + '"] img.card-thumb');
+              if (img) { img.src = URL.createObjectURL(blob); }
+            });
+          }, 'image/png');
+        }, 800);
+      }
+    })
+    .catch(function(e) {
+      console.warn('3D load failed:', e.message);
+      stopViewer();
+      // Fallback: show the embedded thumbnail if one exists
+      var canvas = document.getElementById('viewer-canvas');
+      var img    = document.getElementById('viewer-img');
+      var card   = document.querySelector('.card[data-id="' + id + '"] .card-thumb');
+      if (card && card.tagName === 'IMG' && card.src) {
+        canvas.style.display = 'none';
+        img.style.display    = 'block';
+        img.src = card.src;
+      } else {
+        canvas.style.display = 'none';
+        img.style.display    = 'none';
+        // Show a message in viewer-wrap
+        var wrap = document.getElementById('viewer-wrap');
+        var msg  = document.createElement('p');
+        msg.style.cssText = 'color:var(--muted);text-align:center;padding:2rem;margin:auto';
+        msg.textContent   = '3D preview unavailable for this file.';
+        wrap.appendChild(msg);
+      }
+    });
+}
+
+function parseStlBuffer(buf) {
+  var geo  = new THREE.BufferGeometry();
+  var view = new DataView(buf);
+  var triCount = view.getUint32(80, true);
+  var isBinary = (buf.byteLength === 84 + triCount * 50) && triCount > 0;
+
+  if (isBinary) {
+    var verts = new Float32Array(triCount * 9);
+    for (var i = 0; i < triCount; i++) {
+      var base = 84 + i * 50 + 12;
+      for (var v = 0; v < 3; v++) {
+        var off = base + v * 12;
+        verts[i*9 + v*3]     = view.getFloat32(off,     true);
+        verts[i*9 + v*3 + 1] = view.getFloat32(off + 4, true);
+        verts[i*9 + v*3 + 2] = view.getFloat32(off + 8, true);
+      }
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(verts, 3));
+  } else {
+    var lines = new TextDecoder().decode(buf).split('\n');
+    var verts = [];
+    for (var li = 0; li < lines.length; li++) {
+      var t = lines[li].trim();
+      if (t.slice(0, 7) === 'vertex ') {
+        var p = t.slice(7).trim().split(/\s+/);
+        verts.push(+p[0], +p[1], +p[2]);
+      }
+    }
+    geo.setAttribute('position', new THREE.BufferAttribute(new Float32Array(verts), 3));
+  }
+  return geo;
+}
+
+function stopViewer() {
+  if (animId) cancelAnimationFrame(animId);
+  if (renderer) renderer.dispose();
+  renderer = scene = camera = animId = null;
+}
+</script>
+</body>
+</html>

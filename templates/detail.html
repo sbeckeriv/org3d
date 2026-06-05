@@ -1,0 +1,21 @@
+<h2 style="margin-bottom:.75rem;font-size:1.1rem">{{ m.title }}</h2>
+{% if m.designer %}<p><strong>Designer:</strong> {{ m.designer }}</p>{% endif %}
+{% if m.dims %}<p><strong>Dimensions:</strong> {{ m.dims }}</p>{% endif %}
+{% if m.triangle_count %}<p><strong>Triangles:</strong> {{ m.triangle_count }}</p>{% endif %}
+{% if m.application %}<p><strong>App:</strong> {{ m.application }}</p>{% endif %}
+{% if m.license %}<p><strong>License:</strong> {{ m.license }}</p>{% endif %}
+{% if m.created_at %}<p><strong>Created:</strong> {{ m.created_at }}</p>{% endif %}
+{% if m.description %}
+<p style="margin-top:.6rem;color:var(--muted);font-size:.82rem;line-height:1.5">{{ m.description }}</p>
+{% endif %}
+<p style="margin-top:.5rem;font-size:.72rem;color:var(--border)">{{ m.path }}</p>
+<div style="margin-top:.75rem;display:flex;gap:.5rem;flex-wrap:wrap;align-items:center">
+  <span style="font-size:.78rem;color:var(--muted)">Open in:</span>
+  {% for slicer in [["bambu","Bambu Studio"],["orca","OrcaSlicer"],["prusa","PrusaSlicer"]] %}
+  <button hx-post="/api/model/{{ m.id }}/open/{{ slicer[0] }}" hx-swap="none"
+     style="background:var(--surface);border:1px solid var(--border);color:var(--text);padding:.3rem .7rem;border-radius:6px;font-size:.8rem;cursor:pointer"
+     onmouseenter="this.style.borderColor='var(--accent)'" onmouseleave="this.style.borderColor='var(--border)'">{{ slicer[1] }}</button>
+  {% endfor %}
+</div>
+{% set m_id = m.id %}
+{% include "project_widget.html" %}
