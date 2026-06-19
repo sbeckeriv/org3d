@@ -1,0 +1,20 @@
+[package]
+name = "org3d-app"
+version.workspace = true
+edition = "2024"
+
+[lib]
+name = "org3d_app"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+org3d = { path = ".." }
+tauri = { version = "2", features = [] }
+tokio = { version = "1", features = ["full"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+url = "2"
+rfd = { version = "0.15", features = ["tokio"] }

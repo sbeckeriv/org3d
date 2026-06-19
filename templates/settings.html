@@ -1,0 +1,194 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>org3d — Settings</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.min.js"></script>
+<style>
+:root {
+  --bg: #0f0f13; --surface: #1a1a22; --border: #2a2a38;
+  --accent: #6c63ff; --text: #e0e0f0; --muted: #888;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; }
+header { padding: .75rem 1.5rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 1.25rem; }
+header h1 { font-size: 1.1rem; color: var(--accent); letter-spacing: 2px; font-weight: 700; }
+header a { color: var(--muted); text-decoration: none; font-size: .85rem; }
+header a:hover { color: var(--text); }
+
+.settings { max-width: 580px; margin: 2rem auto; padding: 0 1.5rem 4rem; }
+h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1.75rem; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; }
+.field { margin-bottom: 1.4rem; }
+label { display: block; font-size: .85rem; font-weight: 500; margin-bottom: .35rem; }
+input[type="text"], input[type="number"], select {
+  width: 100%; background: var(--surface); border: 1px solid var(--border);
+  color: var(--text); padding: .5rem .75rem; border-radius: 6px; font-size: .9rem;
+  transition: border-color .15s;
+}
+input[type="text"]:focus, input[type="number"]:focus, select:focus {
+  outline: none; border-color: var(--accent);
+}
+select option { background: var(--surface); }
+.hint { font-size: .75rem; color: var(--muted); margin-top: .35rem; line-height: 1.4; }
+.checkbox-row { display: flex; align-items: center; gap: .6rem; cursor: pointer; }
+.checkbox-row input[type="checkbox"] { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+.checkbox-row label { margin: 0; cursor: pointer; }
+button[type="submit"] {
+  background: var(--accent); color: #fff; border: none; padding: .6rem 1.75rem;
+  border-radius: 6px; font-size: .9rem; font-weight: 500; cursor: pointer;
+  margin-top: .5rem; transition: opacity .15s;
+}
+button[type="submit"]:hover { opacity: .85; }
+.banner {
+  background: var(--surface); border: 1px solid var(--accent); border-radius: 8px;
+  padding: .8rem 1rem; margin-bottom: 1.75rem; font-size: .85rem; color: var(--accent);
+}
+.section-divider { border: none; border-top: 1px solid var(--border); margin: 1.75rem 0; }
+.htmx-indicator { display: none; }
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ORG3D</h1>
+  <a href="/">Gallery</a>
+  <a href="/projects">Projects</a>
+</header>
+
+<div class="settings">
+  <h2>Settings</h2>
+
+  {% if saved %}
+  <div class="banner">
+    {% if scan_started %}
+    Settings saved. Scan started — <a href="/" style="color:inherit">visit the Gallery</a> to see progress.
+    {% else %}
+    Settings saved. Restart the app to apply port and database changes.
+    {% endif %}
+  </div>
+  {% endif %}
+
+  <form method="POST" action="/settings">
+
+    <div class="field">
+      <label for="base_folder">Base Folder</label>
+      <div style="display:flex;gap:.5rem;align-items:center">
+        <input type="text" id="base_folder" name="base_folder" value="{{ settings.base_folder }}" placeholder="/path/to/your/3d-prints" style="flex:1">
+        <button type="button" onclick="pickFolder()" style="background:var(--surface);color:var(--text);border:1px solid var(--border);padding:.5rem .9rem;border-radius:6px;font-size:.85rem;cursor:pointer;white-space:nowrap">Browse…</button>
+      </div>
+      <p class="hint">Root directory to scan for 3MF and STL files. Requires restart.</p>
+    </div>
+
+    <div class="field">
+      <label for="port">Server Port</label>
+      <input type="number" id="port" name="port" value="{{ settings.port }}" min="0" max="65535" style="width:140px">
+      <p class="hint">Use 0 to let the OS pick a free port. Requires restart to take effect.</p>
+    </div>
+
+    <hr class="section-divider">
+
+    <div class="field">
+      <label for="db_path">Database Path</label>
+      <input type="text" id="db_path" name="db_path" value="{{ settings.db_path }}" placeholder="{{ data_dir }}/org3d.db">
+      <p class="hint">SQLite database file. Leave blank to use the app data directory. Requires restart.</p>
+    </div>
+
+    <div class="field">
+      <label for="thumb_dir">Thumbnails Directory</label>
+      <input type="text" id="thumb_dir" name="thumb_dir" value="{{ settings.thumb_dir }}" placeholder="{{ data_dir }}/thumbs">
+      <p class="hint">Where to store generated model thumbnails. Leave blank to use the app data directory. Requires restart.</p>
+    </div>
+
+    <hr class="section-divider">
+
+    <div class="field">
+      <label for="preferred_slicer">Preferred Slicer</label>
+      <select id="preferred_slicer" name="preferred_slicer" style="width:220px">
+        <option value="none"{% if not settings.preferred_slicer %} selected{% endif %}>None</option>
+        <option value="bambu"{% if settings.preferred_slicer == "bambu" %} selected{% endif %}>Bambu Studio</option>
+        <option value="orca"{% if settings.preferred_slicer == "orca" %} selected{% endif %}>OrcaSlicer</option>
+        <option value="prusa"{% if settings.preferred_slicer == "prusa" %} selected{% endif %}>PrusaSlicer</option>
+      </select>
+      <p class="hint">Highlighted in the model detail view. Takes effect immediately.</p>
+    </div>
+
+    <div class="field">
+      <div class="checkbox-row">
+        <input type="checkbox" id="rescan_on_startup" name="rescan_on_startup"{% if settings.rescan_on_startup %} checked{% endif %}>
+        <label for="rescan_on_startup">Re-scan on startup</label>
+      </div>
+      <p class="hint" style="margin-top:.45rem">Scan the base folder every time the app launches, even if the database already has files.</p>
+    </div>
+
+    <button type="submit">Save Settings</button>
+  </form>
+
+  <hr class="section-divider">
+
+  <h2>Actions</h2>
+
+  <div class="field">
+    <label>Rescan Folder</label>
+    <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+      <button type="button"
+        hx-post="/api/rescan"
+        hx-target="#rescan-result"
+        hx-swap="innerHTML"
+        hx-indicator="#rescan-spinner"
+        style="background:var(--surface);color:var(--text);border:1px solid var(--border);padding:.5rem 1.25rem;border-radius:6px;font-size:.9rem;cursor:pointer">
+        Rescan Now
+      </button>
+      <span id="rescan-spinner" class="htmx-indicator" style="color:var(--muted);font-size:.85rem">Starting…</span>
+      <span id="rescan-result" style="font-size:.85rem"></span>
+    </div>
+    <p class="hint" style="margin-top:.45rem">Re-index the base folder. Use this after adding new files without restarting the app.</p>
+  </div>
+
+  <div class="field">
+    <label>Extract ZIPs</label>
+    <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+      <button type="button"
+        hx-post="/api/extract"
+        hx-target="#extract-result"
+        hx-swap="innerHTML"
+        hx-indicator="#extract-spinner"
+        style="background:var(--surface);color:var(--text);border:1px solid var(--border);padding:.5rem 1.25rem;border-radius:6px;font-size:.9rem;cursor:pointer">
+        Extract ZIPs
+      </button>
+      <span id="extract-spinner" class="htmx-indicator" style="color:var(--muted);font-size:.85rem">Starting…</span>
+      <span id="extract-result" style="font-size:.85rem"></span>
+    </div>
+    <p class="hint" style="margin-top:.45rem">Find ZIP archives in the base folder, extract them into sibling directories, then rescan. Already-extracted ZIPs are skipped.</p>
+  </div>
+
+  <div class="field">
+    <label>Auto-group by Folder</label>
+    <div style="display:flex;align-items:center;gap:1rem;flex-wrap:wrap">
+      <button type="button"
+        hx-post="/api/autogroup"
+        hx-target="#autogroup-result"
+        hx-swap="innerHTML"
+        hx-indicator="#autogroup-spinner"
+        style="background:var(--surface);color:var(--text);border:1px solid var(--border);padding:.5rem 1.25rem;border-radius:6px;font-size:.9rem;cursor:pointer">
+        Auto-make Projects
+      </button>
+      <span id="autogroup-spinner" class="htmx-indicator" style="color:var(--muted);font-size:.85rem">Running…</span>
+      <span id="autogroup-result" style="font-size:.85rem"></span>
+    </div>
+    <p class="hint" style="margin-top:.45rem">Groups unassigned models that share a sub-folder into projects. Won't touch models already in a project.</p>
+  </div>
+</div>
+<script>
+async function pickFolder() {
+  if (!window.__TAURI__) { console.warn('pickFolder: window.__TAURI__ not available'); return; }
+  try {
+    const path = await window.__TAURI__.core.invoke('pick_folder');
+    if (path) document.getElementById('base_folder').value = path;
+  } catch(e) {
+    console.error('pickFolder failed:', e);
+  }
+}
+</script>
+</body>
+</html>

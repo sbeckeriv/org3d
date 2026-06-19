@@ -5,3 +5,4 @@ pub mod formats;
 pub mod rename;
 pub mod scanner;
 pub mod server;
+pub mod settings;

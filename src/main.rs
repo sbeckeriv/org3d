@@ -82,9 +82,10 @@ async fn main() -> Result<()> {
         Cmd::Serve { path, port } => {
             let cfg = server::AppConfig {
                 db_path: cli.db,
-                thumb_dir: cli.thumbs,
+                thumb_dir: cli.thumbs.clone(),
                 files_root: path.to_string_lossy().to_string(),
                 port,
+                data_dir: cli.thumbs,
             };
             server::Application::build(cfg).await?.run().await?;
         }
@@ -103,9 +104,10 @@ async fn main() -> Result<()> {
 
             let cfg = server::AppConfig {
                 db_path: cli.db,
-                thumb_dir: cli.thumbs,
+                thumb_dir: cli.thumbs.clone(),
                 files_root: path.to_string_lossy().to_string(),
                 port,
+                data_dir: cli.thumbs,
             };
             server::Application::build(cfg).await?.run().await?;
         }

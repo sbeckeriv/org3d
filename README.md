@@ -12,24 +12,70 @@ A local gallery and organiser for 3D print files. Scans a directory of 3MF and S
 - **Full-text search** — searches titles, designers, descriptions, filenames, folders, and project names
 - **3D preview** — interactive WebGL viewer with mouse rotation and zoom; auto-captures thumbnails on first view
 - **Projects** — group related models together; type-ahead autocomplete on assignment
-- **Open in Bambu Studio** — one click opens the file directly in Bambu Studio from disk
-- **Rename** — renames files to `Designer - Title.3mf` based on embedded metadata (dry-run by default)
+- **Open in slicer** — one click opens the file in Bambu Studio, OrcaSlicer, or PrusaSlicer
+- **Settings UI** — configure folder, port, database path, and slicer preference; changes apply without restarting
+- **Rescan** — re-index after adding new files, triggered from the Settings page or on startup
 - **Autogroup** — automatically creates projects from shared folder names
 - **Extract** — unpacks ZIP archives and re-scans in one step
+- **Rename** — renames files to `Designer - Title.3mf` based on embedded metadata (CLI, dry-run by default)
 
 ## Install
 
+### macOS (Apple Silicon)
+
+Download the latest `.dmg` from the [Releases page](../../releases), open it, and drag **org3d.app** to your Applications folder.
+
+Because org3d is not signed with an Apple Developer certificate, macOS will quarantine the downloaded app. Remove the flag before launching:
+
+```bash
+xattr -dr com.apple.quarantine /Applications/org3d.app
 ```
+
+Then open org3d from Spotlight or your Applications folder. On first launch it opens the Settings page — set your base folder and click **Save**.
+
+> org3d currently ships as an Apple Silicon (M1+) binary only.
+
+### CLI (all platforms)
+
+```bash
 cargo build --release
 ```
 
 The binary is at `target/release/org3d`. No other dependencies required — SQLite is bundled.
 
-## Usage
+## Building from Source
+
+### Desktop app (Tauri)
+
+**Prerequisites:** Rust stable, and [Tauri v2 system dependencies](https://v2.tauri.app/start/prerequisites/) for your platform.
+
+```bash
+# Install the Tauri CLI (one-time)
+cargo install tauri-cli --version "^2" --locked
+
+# Build a release bundle
+cargo tauri build
+```
+
+On macOS this produces a `.dmg` and a signed `.app` under `target/aarch64-apple-darwin/release/bundle/`. On Linux it produces a `.deb` and `.AppImage`; on Windows an `.msi` and `.exe` installer.
+
+To run the app in development (hot-reloads the Rust server, not the Tauri shell):
+
+```bash
+cargo tauri dev
+```
+
+### CLI only
+
+```bash
+cargo build --release --package org3d
+```
+
+## CLI Usage
 
 ### Quick start
 
-```
+```bash
 org3d run ~/Downloads/3d-prints
 ```
 
@@ -95,5 +141,6 @@ org3d run ~/Downloads/3d-prints
 ## Tech
 
 - **Rust** — Axum, rusqlite (SQLite + FTS5), roxmltree, clap, tokio
+- **Tauri v2** — native desktop shell; bundles the Axum server and opens it in a WebView window
 - **Frontend** — HTMX, Three.js, vanilla JS; no build step
 - **Templates** — minijinja (Jinja2-compatible, compiled into the binary)

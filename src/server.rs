@@ -1,7 +1,7 @@
 use anyhow::Result;
 use axum::{
     body::Bytes,
-    extract::{Path, Query, State},
+    extract::{Form, Path, Query, State},
     http::{header, StatusCode},
     response::{Html, IntoResponse},
     routing::{get, post, delete},
@@ -10,9 +10,10 @@ use axum::{
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
 use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, Ordering};
 use tower_http::services::ServeDir;
 
-use crate::db::{self, ModelRow, SearchParams};
+use crate::db::{self, ModelRow};
 
 // ── Application bootstrap ────────────────────────────────────────────────────
 
@@ -21,6 +22,7 @@ pub struct AppConfig {
     pub thumb_dir: String,
     pub files_root: String,
     pub port: u16,
+    pub data_dir: String,
 }
 
 pub struct Application {
@@ -32,13 +34,27 @@ pub struct Application {
 impl Application {
     pub async fn build(cfg: AppConfig) -> Result<Self> {
         let conn = crate::db::open(&cfg.db_path)?;
+        let preferred_slicer = crate::settings::Settings::load().preferred_slicer;
         let state = Arc::new(AppState {
             conn: Mutex::new(conn),
+            db_path: cfg.db_path,
             thumb_dir: cfg.thumb_dir,
-            files_root: cfg.files_root,
+            files_root: std::sync::RwLock::new(cfg.files_root),
             env: make_env(),
+            preferred_slicer: std::sync::RwLock::new(preferred_slicer),
+            data_dir: cfg.data_dir,
+            scanning: Arc::new(AtomicBool::new(false)),
         });
-        let listener = tokio::net::TcpListener::bind(format!("0.0.0.0:{}", cfg.port)).await?;
+        // Port 0 lets the OS assign a free port. If a specific port is configured
+        // but already taken, fall back to OS-assigned rather than crashing.
+        let listener = match tokio::net::TcpListener::bind(format!("0.0.0.0:{}", cfg.port)).await {
+            Ok(l) => l,
+            Err(e) if cfg.port != 0 => {
+                tracing::warn!(port = cfg.port, error = %e, "port in use, binding to OS-assigned port");
+                tokio::net::TcpListener::bind("0.0.0.0:0").await?
+            }
+            Err(e) => return Err(e.into()),
+        };
         let port = listener.local_addr()?.port();
         Ok(Application { port, listener, state })
     }
@@ -56,9 +72,13 @@ impl Application {
 
 pub struct AppState {
     pub conn: Mutex<Connection>,
+    pub db_path: String,
     pub thumb_dir: String,
-    pub files_root: String,
+    pub files_root: std::sync::RwLock<String>,
     pub env: minijinja::Environment<'static>,
+    pub preferred_slicer: std::sync::RwLock<Option<String>>,
+    pub data_dir: String,
+    pub scanning: Arc<AtomicBool>,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -74,6 +94,7 @@ pub fn make_env() -> minijinja::Environment<'static> {
     env.add_template("detail.html",        include_str!("../templates/detail.html")).unwrap();
     env.add_template("projects.html",      include_str!("../templates/projects.html")).unwrap();
     env.add_template("project_widget.html",include_str!("../templates/project_widget.html")).unwrap();
+    env.add_template("settings.html",      include_str!("../templates/settings.html")).unwrap();
     env
 }
 
@@ -83,10 +104,15 @@ pub fn make_router(state: SharedState) -> Router {
         .route("/health_check", get(health_check))
         .route("/", get(gallery))
         .route("/projects", get(projects_page))
+        .route("/settings", get(settings_page).post(save_settings))
+        .route("/api/scan/status", get(scan_status))
         .route("/search", get(search_results))
         .route("/model/{id}", get(model_detail))
         .route("/file/{id}", get(serve_model_file))
         .route("/stl/{id}", get(serve_as_stl))
+        .route("/api/autogroup", post(autogroup_handler))
+        .route("/api/rescan", post(rescan_handler))
+        .route("/api/extract", post(extract_handler))
         .route("/api/model/{id}/thumbnail", post(upload_thumbnail))
         .route("/api/model/{id}/open/{app}", post(open_in_slicer))
         .route("/api/model/{id}/project", post(set_project))
@@ -210,8 +236,9 @@ async fn model_detail(
                 .and_then(|pid| db::get_project_name(&conn, pid).ok().flatten());
             let projects = db::list_projects(&conn).unwrap_or_default();
             let m = ModelCtx::from(&row);
+            let preferred_slicer = state.preferred_slicer.read().ok().and_then(|g| g.clone());
             let html = state.env.get_template("detail.html").unwrap()
-                .render(minijinja::context! { m, project_name, projects })
+                .render(minijinja::context! { m, project_name, projects, preferred_slicer })
                 .unwrap_or_else(|e| format!("template error: {e}"));
             Html(html).into_response()
         }
@@ -299,6 +326,75 @@ async fn clear_project(State(state): State<SharedState>, Path(id): Path<i64>) ->
     Html(html)
 }
 
+async fn settings_page(State(state): State<SharedState>) -> impl IntoResponse {
+    let settings = crate::settings::Settings::load();
+    let data_dir = &state.data_dir;
+    let html = state.env.get_template("settings.html").unwrap()
+        .render(minijinja::context! { settings, saved => false, data_dir })
+        .unwrap_or_else(|e| format!("template error: {e}"));
+    Html(html)
+}
+
+#[derive(Deserialize)]
+struct SettingsForm {
+    base_folder: String,
+    port: String,
+    db_path: String,
+    thumb_dir: String,
+    preferred_slicer: String,
+    rescan_on_startup: Option<String>,
+}
+
+async fn save_settings(
+    State(state): State<SharedState>,
+    Form(form): Form<SettingsForm>,
+) -> impl IntoResponse {
+    let preferred_slicer = match form.preferred_slicer.as_str() {
+        "none" | "" => None,
+        s => Some(s.to_string()),
+    };
+    let base_folder = form.base_folder.trim().to_string();
+    let settings = crate::settings::Settings {
+        base_folder: base_folder.clone(),
+        port: form.port.trim().parse::<u16>().unwrap_or(0),
+        db_path: form.db_path.trim().to_string(),
+        thumb_dir: form.thumb_dir.trim().to_string(),
+        preferred_slicer: preferred_slicer.clone(),
+        rescan_on_startup: form.rescan_on_startup.as_deref() == Some("on"),
+    };
+    if let Ok(mut guard) = state.preferred_slicer.write() {
+        *guard = preferred_slicer;
+    }
+    if let Ok(mut guard) = state.files_root.write() {
+        *guard = base_folder.clone();
+    }
+    let saved = settings.save().is_ok();
+
+    let scan_started = !base_folder.is_empty() && !state.scanning.load(Ordering::Relaxed);
+    if scan_started {
+        let db_path = state.db_path.clone();
+        let thumb_dir = state.thumb_dir.clone();
+        let scanning = state.scanning.clone();
+        scanning.store(true, Ordering::Relaxed);
+        tokio::task::spawn_blocking(move || {
+            if let Ok(conn) = crate::db::open(&db_path) {
+                let _ = crate::scanner::scan(
+                    &conn,
+                    std::path::Path::new(&base_folder),
+                    std::path::Path::new(&thumb_dir),
+                );
+            }
+            scanning.store(false, Ordering::Relaxed);
+        });
+    }
+
+    let data_dir = &state.data_dir;
+    let html = state.env.get_template("settings.html").unwrap()
+        .render(minijinja::context! { settings, saved, scan_started, data_dir })
+        .unwrap_or_else(|e| format!("template error: {e}"));
+    Html(html)
+}
+
 const KNOWN_SLICERS: &[(&str, &str)] = &[
     ("bambu",  "BambuStudio"),
     ("orca",   "OrcaSlicer"),
@@ -336,6 +432,98 @@ async fn serve_model_file(State(state): State<SharedState>, Path(id): Path<i64>)
             Err(_) => (StatusCode::NOT_FOUND, "file not on disk").into_response(),
         },
         _ => (StatusCode::NOT_FOUND, "model not found").into_response(),
+    }
+}
+
+async fn rescan_handler(State(state): State<SharedState>) -> impl IntoResponse {
+    let files_root = state.files_root.read().ok()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    if files_root.is_empty() {
+        return Html(r#"<span style="color:var(--muted)">No base folder configured.</span>"#.to_string());
+    }
+    if state.scanning.load(Ordering::Relaxed) {
+        return Html(r#"<span style="color:var(--muted)">Scan already in progress.</span>"#.to_string());
+    }
+    let db_path = state.db_path.clone();
+    let thumb_dir = state.thumb_dir.clone();
+    let scanning = state.scanning.clone();
+    scanning.store(true, Ordering::Relaxed);
+    tokio::task::spawn_blocking(move || {
+        if let Ok(conn) = crate::db::open(&db_path) {
+            let _ = crate::scanner::scan(
+                &conn,
+                std::path::Path::new(&files_root),
+                std::path::Path::new(&thumb_dir),
+            );
+        }
+        scanning.store(false, Ordering::Relaxed);
+    });
+    Html(r#"<span style="color:#80c080">Scan started — check the <a href="/" style="color:inherit">Gallery</a> for progress.</span>"#.to_string())
+}
+
+async fn extract_handler(State(state): State<SharedState>) -> impl IntoResponse {
+    let files_root = state.files_root.read().ok()
+        .map(|g| g.clone())
+        .unwrap_or_default();
+    if files_root.is_empty() {
+        return Html(r#"<span style="color:var(--muted)">No base folder configured.</span>"#.to_string());
+    }
+    if state.scanning.load(Ordering::Relaxed) {
+        return Html(r#"<span style="color:var(--muted)">A scan is already in progress — try again after it finishes.</span>"#.to_string());
+    }
+    let db_path = state.db_path.clone();
+    let thumb_dir = state.thumb_dir.clone();
+    let scanning = state.scanning.clone();
+    scanning.store(true, Ordering::Relaxed);
+    tokio::task::spawn_blocking(move || {
+        let results = crate::extract::extract_all(std::path::Path::new(&files_root))
+            .unwrap_or_default();
+        let zips: usize = results.iter().filter(|r| !r.skipped).count();
+        let files: usize = results.iter().map(|r| r.files_extracted).sum();
+        if zips > 0 {
+            if let Ok(conn) = crate::db::open(&db_path) {
+                let _ = crate::scanner::scan(
+                    &conn,
+                    std::path::Path::new(&files_root),
+                    std::path::Path::new(&thumb_dir),
+                );
+            }
+        }
+        scanning.store(false, Ordering::Relaxed);
+        (zips, files)
+    });
+    Html(r#"<span style="color:#80c080">Extracting ZIPs and scanning — check the <a href="/" style="color:inherit">Gallery</a> for progress.</span>"#.to_string())
+}
+
+async fn autogroup_handler(State(state): State<SharedState>) -> impl IntoResponse {
+    let conn = state.conn.lock().unwrap();
+    match crate::autogroup::run(&conn) {
+        Ok(s) if s.models_assigned == 0 => Html(
+            r#"<span style="color:var(--muted)">Nothing to group — run a scan first or all models are already assigned.</span>"#.to_string()
+        ),
+        Ok(s) => Html(format!(
+            r#"<span style="color:#80c080">Created {} project{}, assigned {} model{}.</span>"#,
+            s.projects_created, if s.projects_created == 1 { "" } else { "s" },
+            s.models_assigned,  if s.models_assigned  == 1 { "" } else { "s" },
+        )),
+        Err(e) => Html(format!(r#"<span style="color:#c08080">Error: {e}</span>"#)),
+    }
+}
+
+async fn scan_status(State(state): State<SharedState>) -> impl IntoResponse {
+    let is_scanning = state.scanning.load(Ordering::Relaxed);
+    let count = {
+        let conn = state.conn.lock().unwrap();
+        crate::db::count(&conn).unwrap_or(0)
+    };
+    if is_scanning {
+        Html(format!(
+            r#"<span id="scan-status" class="count" hx-get="/api/scan/status" hx-trigger="every 1s" hx-swap="outerHTML"><span class="spinner"></span> {} models</span>"#,
+            count
+        ))
+    } else {
+        Html(format!(r#"<span id="scan-status" class="count">{} models</span>"#, count))
     }
 }
 

@@ -1,0 +1,97 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    branches: [main]
+    types: [completed]
+
+jobs:
+  release-macos:
+    name: Build macOS Apple Silicon binary
+    if: github.event.workflow_run.conclusion == 'success'
+    runs-on: macos-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Read version from Cargo.toml
+        id: version
+        run: |
+          VERSION=$(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "org3d") | .version')
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
+
+      - name: Check if release already exists
+        id: check
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "${{ steps.version.outputs.tag }}" --repo "${{ github.repository }}" &>/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Cache Rust build artifacts
+        if: steps.check.outputs.exists == 'false'
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: . -> target
+
+      - name: Install Node (required by Tauri CLI)
+        if: steps.check.outputs.exists == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Install Tauri CLI
+        if: steps.check.outputs.exists == 'false'
+        run: cargo install tauri-cli --version "^2" --locked
+
+      - name: Build macOS app
+        if: steps.check.outputs.exists == 'false'
+        run: cargo tauri build --target aarch64-apple-darwin
+
+      - name: Locate artifacts
+        if: steps.check.outputs.exists == 'false'
+        id: artifacts
+        run: |
+          DMG=$(find target -name "*.dmg" | head -1)
+          echo "dmg=$DMG" >> "$GITHUB_OUTPUT"
+          echo "dmg_name=$(basename $DMG)" >> "$GITHUB_OUTPUT"
+
+      - name: Create GitHub release
+        if: steps.check.outputs.exists == 'false'
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: org3d ${{ steps.version.outputs.tag }}
+          draft: false
+          generate_release_notes: true
+          body: |
+            ## Installation
+
+            1. Download **${{ steps.artifacts.outputs.dmg_name }}** below
+            2. Open the DMG and drag **org3d.app** to your Applications folder
+            3. **Remove the quarantine flag** — macOS will say the app is "damaged" without this:
+               ```
+               xattr -dr com.apple.quarantine /Applications/org3d.app
+               ```
+            4. Launch org3d from Spotlight or your Applications folder
+
+            > org3d is not signed with an Apple Developer certificate. The quarantine flag is added by your browser when you download any unsigned app; the xattr command removes it.
+
+            ---
+
+            **Apple Silicon** — requires an M-series Mac (M1 or later).
+          files: |
+            ${{ steps.artifacts.outputs.dmg }}
