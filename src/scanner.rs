@@ -33,15 +33,17 @@ pub fn scan(conn: &Connection, root: &Path, thumb_dir: &Path) -> Result<ScanStat
 
     let pb = ProgressBar::new(files.len() as u64);
     pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.cyan} [{bar:40.cyan/blue}] {pos}/{len} {wide_msg}",
-        )
-        .unwrap()
-        .progress_chars("█▉▊▋▌▍▎▏  "),
+        ProgressStyle::with_template("{spinner:.cyan} [{bar:40.cyan/blue}] {pos}/{len} {wide_msg}")
+            .unwrap()
+            .progress_chars("█▉▊▋▌▍▎▏  "),
     );
     pb.enable_steady_tick(std::time::Duration::from_millis(80));
 
-    let mut stats = ScanStats { scanned: 0, inserted: 0, errors: 0 };
+    let mut stats = ScanStats {
+        scanned: 0,
+        inserted: 0,
+        errors: 0,
+    };
 
     // Single transaction: FTS triggers fire at commit, search stays consistent
     // and scan is ~10x faster than autocommit.
@@ -108,27 +110,30 @@ fn index_threemf(conn: &Connection, path: &Path, root: &Path, thumb_dir: &Path) 
         None
     };
 
-    db::upsert(conn, &ModelRow {
-        id: 0,
-        path: path.to_string_lossy().to_string(),
-        filename,
-        folder,
-        format: "3MF".to_string(),
-        file_size,
-        title: meta.title,
-        designer: meta.designer,
-        description: meta.description,
-        application: meta.application,
-        license: meta.license,
-        created_at: meta.created_at,
-        object_count: meta.object_count.map(|n| n as i64),
-        triangle_count: meta.triangle_count.map(|n| n as i64),
-        dim_x: meta.dim_x,
-        dim_y: meta.dim_y,
-        dim_z: meta.dim_z,
-        thumbnail_path,
-        project_id: None,
-    })?;
+    db::upsert(
+        conn,
+        &ModelRow {
+            id: 0,
+            path: path.to_string_lossy().to_string(),
+            filename,
+            folder,
+            format: "3MF".to_string(),
+            file_size,
+            title: meta.title,
+            designer: meta.designer,
+            description: meta.description,
+            application: meta.application,
+            license: meta.license,
+            created_at: meta.created_at,
+            object_count: meta.object_count.map(|n| n as i64),
+            triangle_count: meta.triangle_count.map(|n| n as i64),
+            dim_x: meta.dim_x,
+            dim_y: meta.dim_y,
+            dim_z: meta.dim_z,
+            thumbnail_path,
+            project_id: None,
+        },
+    )?;
 
     Ok(())
 }
@@ -139,27 +144,30 @@ fn index_stl(conn: &Connection, path: &Path, root: &Path) -> Result<()> {
     let filename = path.file_name().unwrap().to_string_lossy().to_string();
     let folder = relative_folder(path, root);
 
-    db::upsert(conn, &ModelRow {
-        id: 0,
-        path: path.to_string_lossy().to_string(),
-        filename,
-        folder,
-        format: "STL".to_string(),
-        file_size,
-        title: meta.name,
-        designer: None,
-        description: None,
-        application: meta.header,
-        license: None,
-        created_at: None,
-        object_count: Some(1),
-        triangle_count: Some(meta.triangle_count as i64),
-        dim_x: meta.dim_x,
-        dim_y: meta.dim_y,
-        dim_z: meta.dim_z,
-        thumbnail_path: None,
-        project_id: None,
-    })?;
+    db::upsert(
+        conn,
+        &ModelRow {
+            id: 0,
+            path: path.to_string_lossy().to_string(),
+            filename,
+            folder,
+            format: "STL".to_string(),
+            file_size,
+            title: meta.name,
+            designer: None,
+            description: None,
+            application: meta.header,
+            license: None,
+            created_at: None,
+            object_count: Some(1),
+            triangle_count: Some(meta.triangle_count as i64),
+            dim_x: meta.dim_x,
+            dim_y: meta.dim_y,
+            dim_z: meta.dim_z,
+            thumbnail_path: None,
+            project_id: None,
+        },
+    )?;
 
     Ok(())
 }
@@ -169,7 +177,11 @@ fn relative_folder(path: &Path, root: &Path) -> String {
         .and_then(|p| p.strip_prefix(root).ok())
         .map(|p| {
             let s = p.to_string_lossy();
-            if s.is_empty() { "/".to_string() } else { format!("/{s}") }
+            if s.is_empty() {
+                "/".to_string()
+            } else {
+                format!("/{s}")
+            }
         })
         .unwrap_or_else(|| "/".to_string())
 }

@@ -1,16 +1,16 @@
 use anyhow::Result;
 use axum::{
+    Router,
     body::Bytes,
     extract::{Form, Path, Query, State},
-    http::{header, StatusCode},
+    http::{StatusCode, header},
     response::{Html, IntoResponse},
-    routing::{get, post, delete},
-    Router,
+    routing::{delete, get, post},
 };
 use rusqlite::Connection;
 use serde::{Deserialize, Serialize};
-use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tower_http::services::ServeDir;
 
 use crate::db::{self, ModelRow};
@@ -56,10 +56,16 @@ impl Application {
             Err(e) => return Err(e.into()),
         };
         let port = listener.local_addr()?.port();
-        Ok(Application { port, listener, state })
+        Ok(Application {
+            port,
+            listener,
+            state,
+        })
     }
 
-    pub fn port(&self) -> u16 { self.port }
+    pub fn port(&self) -> u16 {
+        self.port
+    }
 
     pub async fn run(self) -> Result<()> {
         tracing::info!("listening on http://localhost:{}", self.port);
@@ -86,15 +92,32 @@ pub type SharedState = Arc<AppState>;
 pub fn make_env() -> minijinja::Environment<'static> {
     let mut env = minijinja::Environment::new();
     env.set_auto_escape_callback(|name: &str| {
-        if name.ends_with(".html") { minijinja::AutoEscape::Html } else { minijinja::AutoEscape::None }
+        if name.ends_with(".html") {
+            minijinja::AutoEscape::Html
+        } else {
+            minijinja::AutoEscape::None
+        }
     });
-    env.add_template("gallery.html",       include_str!("../templates/gallery.html")).unwrap();
-    env.add_template("cards.html",         include_str!("../templates/cards.html")).unwrap();
-    env.add_template("pagination.html",    include_str!("../templates/pagination.html")).unwrap();
-    env.add_template("detail.html",        include_str!("../templates/detail.html")).unwrap();
-    env.add_template("projects.html",      include_str!("../templates/projects.html")).unwrap();
-    env.add_template("project_widget.html",include_str!("../templates/project_widget.html")).unwrap();
-    env.add_template("settings.html",      include_str!("../templates/settings.html")).unwrap();
+    env.add_template("gallery.html", include_str!("../templates/gallery.html"))
+        .unwrap();
+    env.add_template("cards.html", include_str!("../templates/cards.html"))
+        .unwrap();
+    env.add_template(
+        "pagination.html",
+        include_str!("../templates/pagination.html"),
+    )
+    .unwrap();
+    env.add_template("detail.html", include_str!("../templates/detail.html"))
+        .unwrap();
+    env.add_template("projects.html", include_str!("../templates/projects.html"))
+        .unwrap();
+    env.add_template(
+        "project_widget.html",
+        include_str!("../templates/project_widget.html"),
+    )
+    .unwrap();
+    env.add_template("settings.html", include_str!("../templates/settings.html"))
+        .unwrap();
     env
 }
 
@@ -145,7 +168,11 @@ fn truncate_description(s: &str) -> String {
     let s = s.replace('\n', " ");
     let mut chars = s.chars();
     let out: String = chars.by_ref().take(300).collect();
-    if chars.next().is_some() { format!("{out}…") } else { out }
+    if chars.next().is_some() {
+        format!("{out}…")
+    } else {
+        out
+    }
 }
 
 /// Treat empty strings from query params as absent (no filter).
@@ -161,20 +188,26 @@ async fn gallery(
     let conn = state.conn.lock().unwrap();
 
     let sp = db::SearchParams {
-        query:    nonempty(params.q.as_deref()),
+        query: nonempty(params.q.as_deref()),
         designer: None,
-        folder:   None,
-        format:   nonempty(params.format.as_deref()),
-        project:  parse_project(params.project.as_deref()),
+        folder: None,
+        format: nonempty(params.format.as_deref()),
+        project: parse_project(params.project.as_deref()),
         limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
     };
     let models: Vec<ModelCtx> = db::search(&conn, &sp)
-        .unwrap_or_default().iter().map(ModelCtx::from).collect();
+        .unwrap_or_default()
+        .iter()
+        .map(ModelCtx::from)
+        .collect();
     let projects = db::list_projects(&conn).unwrap_or_default();
-    let total    = db::search_count(&conn, &sp).unwrap_or(0);
+    let total = db::search_count(&conn, &sp).unwrap_or(0);
 
-    let html = state.env.get_template("gallery.html").unwrap()
+    let html = state
+        .env
+        .get_template("gallery.html")
+        .unwrap()
         .render(minijinja::context! {
             total, models, projects,
             q       => params.q.as_deref().unwrap_or(""),
@@ -193,51 +226,61 @@ async fn search_results(
     State(state): State<SharedState>,
     Query(params): Query<GalleryQuery>,
 ) -> impl IntoResponse {
-    let page    = params.page.unwrap_or(0).max(0);
-    let q       = params.q.as_deref().unwrap_or("").to_string();
-    let format  = params.format.as_deref().unwrap_or("").to_string();
+    let page = params.page.unwrap_or(0).max(0);
+    let q = params.q.as_deref().unwrap_or("").to_string();
+    let format = params.format.as_deref().unwrap_or("").to_string();
     let project = parse_project(params.project.as_deref());
-    let conn    = state.conn.lock().unwrap();
+    let conn = state.conn.lock().unwrap();
 
     let sp = db::SearchParams {
-        query:    nonempty(params.q.as_deref()),
+        query: nonempty(params.q.as_deref()),
         designer: None,
-        folder:   None,
-        format:   nonempty(params.format.as_deref()),
+        folder: None,
+        format: nonempty(params.format.as_deref()),
         project,
-        limit:  PAGE_SIZE,
+        limit: PAGE_SIZE,
         offset: page * PAGE_SIZE,
     };
     let models: Vec<ModelCtx> = db::search(&conn, &sp)
-        .unwrap_or_default().iter().map(ModelCtx::from).collect();
+        .unwrap_or_default()
+        .iter()
+        .map(ModelCtx::from)
+        .collect();
     let total = db::search_count(&conn, &sp).unwrap_or(0);
 
-    let cards = state.env.get_template("cards.html").unwrap()
+    let cards = state
+        .env
+        .get_template("cards.html")
+        .unwrap()
         .render(minijinja::context! { models })
         .unwrap_or_else(|e| format!("template error: {e}"));
 
     let prev_page: Option<i64> = if page > 0 { Some(page - 1) } else { None };
     let next_page = page + 1;
-    let pagination = state.env.get_template("pagination.html").unwrap()
+    let pagination = state
+        .env
+        .get_template("pagination.html")
+        .unwrap()
         .render(minijinja::context! { total, page, prev_page, next_page, q, format, project })
         .unwrap_or_default();
 
     Html(format!("{cards}\n{pagination}"))
 }
 
-async fn model_detail(
-    State(state): State<SharedState>,
-    Path(id): Path<i64>,
-) -> impl IntoResponse {
+async fn model_detail(State(state): State<SharedState>, Path(id): Path<i64>) -> impl IntoResponse {
     let conn = state.conn.lock().unwrap();
     match db::get_by_id(&conn, id) {
         Ok(Some(row)) => {
-            let project_name = row.project_id
+            let project_name = row
+                .project_id
                 .and_then(|pid| db::get_project_name(&conn, pid).ok().flatten());
             let projects = db::list_projects(&conn).unwrap_or_default();
             let m = ModelCtx::from(&row);
             let preferred_slicer = state.preferred_slicer.read().ok().and_then(|g| g.clone());
-            let html = state.env.get_template("detail.html").unwrap()
+            let html = state
+                .env
+                .get_template("detail.html")
+                .unwrap()
                 .render(minijinja::context! { m, project_name, projects, preferred_slicer })
                 .unwrap_or_else(|e| format!("template error: {e}"));
             Html(html).into_response()
@@ -249,7 +292,10 @@ async fn model_detail(
 async fn projects_page(State(state): State<SharedState>) -> impl IntoResponse {
     let conn = state.conn.lock().unwrap();
     let projects = db::list_projects(&conn).unwrap_or_default();
-    let html = state.env.get_template("projects.html").unwrap()
+    let html = state
+        .env
+        .get_template("projects.html")
+        .unwrap()
         .render(minijinja::context! { projects })
         .unwrap_or_else(|e| format!("template error: {e}"));
     Html(html)
@@ -266,7 +312,7 @@ async fn serve_as_stl(State(state): State<SharedState>, Path(id): Path<i64>) -> 
             };
             match bytes {
                 Some(b) => ([(header::CONTENT_TYPE, "model/stl")], b).into_response(),
-                None    => (StatusCode::NOT_FOUND, "could not read model").into_response(),
+                None => (StatusCode::NOT_FOUND, "could not read model").into_response(),
             }
         }
         _ => (StatusCode::NOT_FOUND, "model not found").into_response(),
@@ -278,17 +324,23 @@ async fn upload_thumbnail(
     Path(id): Path<i64>,
     body: Bytes,
 ) -> StatusCode {
-    if body.is_empty() { return StatusCode::BAD_REQUEST; }
+    if body.is_empty() {
+        return StatusCode::BAD_REQUEST;
+    }
     let thumb_name = format!("cap_{id}.png");
     let thumb_path = std::path::PathBuf::from(&state.thumb_dir).join(&thumb_name);
-    if std::fs::write(&thumb_path, &body).is_err() { return StatusCode::INTERNAL_SERVER_ERROR; }
+    if std::fs::write(&thumb_path, &body).is_err() {
+        return StatusCode::INTERNAL_SERVER_ERROR;
+    }
     let conn = state.conn.lock().unwrap();
     let _ = db::update_thumbnail(&conn, id, &format!("/thumbs/{thumb_name}"));
     StatusCode::OK
 }
 
 #[derive(Deserialize)]
-struct SetProjectBody { name: String }
+struct SetProjectBody {
+    name: String,
+}
 
 async fn set_project(
     State(state): State<SharedState>,
@@ -296,7 +348,9 @@ async fn set_project(
     axum::Json(body): axum::Json<SetProjectBody>,
 ) -> impl IntoResponse {
     let name = body.name.trim().to_string();
-    if name.is_empty() { return StatusCode::BAD_REQUEST.into_response(); }
+    if name.is_empty() {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
     let conn = state.conn.lock().unwrap();
     match db::find_or_create_project(&conn, &name)
         .and_then(|pid| db::assign_project(&conn, id, pid))
@@ -304,7 +358,10 @@ async fn set_project(
         Ok(_) => {
             let project_name: Option<String> = Some(name);
             let projects = db::list_projects(&conn).unwrap_or_default();
-            let html = state.env.get_template("project_widget.html").unwrap()
+            let html = state
+                .env
+                .get_template("project_widget.html")
+                .unwrap()
                 .render(minijinja::context! { m_id => id, project_name, projects })
                 .unwrap_or_else(|e| format!("error: {e}"));
             Html(html).into_response()
@@ -320,7 +377,10 @@ async fn clear_project(State(state): State<SharedState>, Path(id): Path<i64>) ->
     let conn = state.conn.lock().unwrap();
     let _ = db::remove_from_project(&conn, id);
     let projects = db::list_projects(&conn).unwrap_or_default();
-    let html = state.env.get_template("project_widget.html").unwrap()
+    let html = state
+        .env
+        .get_template("project_widget.html")
+        .unwrap()
         .render(minijinja::context! { m_id => id, project_name => None::<String>, projects })
         .unwrap_or_else(|e| format!("error: {e}"));
     Html(html)
@@ -329,7 +389,10 @@ async fn clear_project(State(state): State<SharedState>, Path(id): Path<i64>) ->
 async fn settings_page(State(state): State<SharedState>) -> impl IntoResponse {
     let settings = crate::settings::Settings::load();
     let data_dir = &state.data_dir;
-    let html = state.env.get_template("settings.html").unwrap()
+    let html = state
+        .env
+        .get_template("settings.html")
+        .unwrap()
         .render(minijinja::context! { settings, saved => false, data_dir })
         .unwrap_or_else(|e| format!("template error: {e}"));
     Html(html)
@@ -389,16 +452,19 @@ async fn save_settings(
     }
 
     let data_dir = &state.data_dir;
-    let html = state.env.get_template("settings.html").unwrap()
+    let html = state
+        .env
+        .get_template("settings.html")
+        .unwrap()
         .render(minijinja::context! { settings, saved, scan_started, data_dir })
         .unwrap_or_else(|e| format!("template error: {e}"));
     Html(html)
 }
 
 const KNOWN_SLICERS: &[(&str, &str)] = &[
-    ("bambu",  "BambuStudio"),
-    ("orca",   "OrcaSlicer"),
-    ("prusa",  "PrusaSlicer"),
+    ("bambu", "BambuStudio"),
+    ("orca", "OrcaSlicer"),
+    ("prusa", "PrusaSlicer"),
 ];
 
 async fn open_in_slicer(
@@ -415,18 +481,28 @@ async fn open_in_slicer(
         _ => return StatusCode::NOT_FOUND,
     };
     drop(conn);
-    match std::process::Command::new("open").args(["-a", app_name, &path]).status() {
+    match std::process::Command::new("open")
+        .args(["-a", app_name, &path])
+        .status()
+    {
         Ok(s) if s.success() => StatusCode::OK,
         _ => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
 
-async fn serve_model_file(State(state): State<SharedState>, Path(id): Path<i64>) -> impl IntoResponse {
+async fn serve_model_file(
+    State(state): State<SharedState>,
+    Path(id): Path<i64>,
+) -> impl IntoResponse {
     let conn = state.conn.lock().unwrap();
     match db::get_by_id(&conn, id) {
         Ok(Some(m)) => match std::fs::read(&m.path) {
             Ok(bytes) => {
-                let ct = if m.format == "3MF" { "model/3mf" } else { "application/octet-stream" };
+                let ct = if m.format == "3MF" {
+                    "model/3mf"
+                } else {
+                    "application/octet-stream"
+                };
                 ([(header::CONTENT_TYPE, ct)], bytes).into_response()
             }
             Err(_) => (StatusCode::NOT_FOUND, "file not on disk").into_response(),
@@ -436,14 +512,21 @@ async fn serve_model_file(State(state): State<SharedState>, Path(id): Path<i64>)
 }
 
 async fn rescan_handler(State(state): State<SharedState>) -> impl IntoResponse {
-    let files_root = state.files_root.read().ok()
+    let files_root = state
+        .files_root
+        .read()
+        .ok()
         .map(|g| g.clone())
         .unwrap_or_default();
     if files_root.is_empty() {
-        return Html(r#"<span style="color:var(--muted)">No base folder configured.</span>"#.to_string());
+        return Html(
+            r#"<span style="color:var(--muted)">No base folder configured.</span>"#.to_string(),
+        );
     }
     if state.scanning.load(Ordering::Relaxed) {
-        return Html(r#"<span style="color:var(--muted)">Scan already in progress.</span>"#.to_string());
+        return Html(
+            r#"<span style="color:var(--muted)">Scan already in progress.</span>"#.to_string(),
+        );
     }
     let db_path = state.db_path.clone();
     let thumb_dir = state.thumb_dir.clone();
@@ -463,11 +546,16 @@ async fn rescan_handler(State(state): State<SharedState>) -> impl IntoResponse {
 }
 
 async fn extract_handler(State(state): State<SharedState>) -> impl IntoResponse {
-    let files_root = state.files_root.read().ok()
+    let files_root = state
+        .files_root
+        .read()
+        .ok()
         .map(|g| g.clone())
         .unwrap_or_default();
     if files_root.is_empty() {
-        return Html(r#"<span style="color:var(--muted)">No base folder configured.</span>"#.to_string());
+        return Html(
+            r#"<span style="color:var(--muted)">No base folder configured.</span>"#.to_string(),
+        );
     }
     if state.scanning.load(Ordering::Relaxed) {
         return Html(r#"<span style="color:var(--muted)">A scan is already in progress — try again after it finishes.</span>"#.to_string());
@@ -477,8 +565,8 @@ async fn extract_handler(State(state): State<SharedState>) -> impl IntoResponse 
     let scanning = state.scanning.clone();
     scanning.store(true, Ordering::Relaxed);
     tokio::task::spawn_blocking(move || {
-        let results = crate::extract::extract_all(std::path::Path::new(&files_root))
-            .unwrap_or_default();
+        let results =
+            crate::extract::extract_all(std::path::Path::new(&files_root)).unwrap_or_default();
         let zips: usize = results.iter().filter(|r| !r.skipped).count();
         let files: usize = results.iter().map(|r| r.files_extracted).sum();
         if zips > 0 {
@@ -523,7 +611,10 @@ async fn scan_status(State(state): State<SharedState>) -> impl IntoResponse {
             count
         ))
     } else {
-        Html(format!(r#"<span id="scan-status" class="count">{} models</span>"#, count))
+        Html(format!(
+            r#"<span id="scan-status" class="count">{} models</span>"#,
+            count
+        ))
     }
 }
 

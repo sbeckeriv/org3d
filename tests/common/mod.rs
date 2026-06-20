@@ -59,39 +59,57 @@ where
 #[allow(dead_code)]
 pub async fn spawn_seeded() -> TestApp {
     spawn_app(|conn| {
-        db::upsert(conn, &db::ModelRow {
-            id: 0,
-            path: "/tmp/dragon.stl".to_string(),
-            filename: "dragon.stl".to_string(),
-            folder: "/miniatures".to_string(),
-            format: "STL".to_string(),
-            file_size: 2048,
-            title: Some("Dragon".to_string()),
-            designer: Some("Alice".to_string()),
-            description: Some("A fearsome dragon".to_string()),
-            application: None, license: None, created_at: None,
-            object_count: Some(1), triangle_count: Some(500),
-            dim_x: Some(80.0), dim_y: Some(60.0), dim_z: Some(40.0),
-            thumbnail_path: None,
-            project_id: None,
-        }).unwrap();
+        db::upsert(
+            conn,
+            &db::ModelRow {
+                id: 0,
+                path: "/tmp/dragon.stl".to_string(),
+                filename: "dragon.stl".to_string(),
+                folder: "/miniatures".to_string(),
+                format: "STL".to_string(),
+                file_size: 2048,
+                title: Some("Dragon".to_string()),
+                designer: Some("Alice".to_string()),
+                description: Some("A fearsome dragon".to_string()),
+                application: None,
+                license: None,
+                created_at: None,
+                object_count: Some(1),
+                triangle_count: Some(500),
+                dim_x: Some(80.0),
+                dim_y: Some(60.0),
+                dim_z: Some(40.0),
+                thumbnail_path: None,
+                project_id: None,
+            },
+        )
+        .unwrap();
 
-        db::upsert(conn, &db::ModelRow {
-            id: 0,
-            path: "/tmp/bunny.3mf".to_string(),
-            filename: "bunny.3mf".to_string(),
-            folder: "/cute".to_string(),
-            format: "3MF".to_string(),
-            file_size: 512,
-            title: Some("Bunny".to_string()),
-            designer: Some("Bob".to_string()),
-            description: Some("An adorable bunny".to_string()),
-            application: Some("BambuStudio".to_string()),
-            license: None, created_at: Some("2025-01-01".to_string()),
-            object_count: Some(1), triangle_count: Some(200),
-            dim_x: Some(30.0), dim_y: Some(25.0), dim_z: Some(20.0),
-            thumbnail_path: None,
-            project_id: None,
-        }).unwrap();
-    }).await
+        db::upsert(
+            conn,
+            &db::ModelRow {
+                id: 0,
+                path: "/tmp/bunny.3mf".to_string(),
+                filename: "bunny.3mf".to_string(),
+                folder: "/cute".to_string(),
+                format: "3MF".to_string(),
+                file_size: 512,
+                title: Some("Bunny".to_string()),
+                designer: Some("Bob".to_string()),
+                description: Some("An adorable bunny".to_string()),
+                application: Some("BambuStudio".to_string()),
+                license: None,
+                created_at: Some("2025-01-01".to_string()),
+                object_count: Some(1),
+                triangle_count: Some(200),
+                dim_x: Some(30.0),
+                dim_y: Some(25.0),
+                dim_z: Some(20.0),
+                thumbnail_path: None,
+                project_id: None,
+            },
+        )
+        .unwrap();
+    })
+    .await
 }

@@ -62,8 +62,7 @@ pub fn extract_all(root: &Path) -> Result<Vec<ExtractResult>> {
 }
 
 fn extract_one(zip_path: &Path, dest: &Path) -> Result<usize> {
-    std::fs::create_dir_all(dest)
-        .with_context(|| format!("creating {}", dest.display()))?;
+    std::fs::create_dir_all(dest).with_context(|| format!("creating {}", dest.display()))?;
 
     let file = std::fs::File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)
@@ -132,7 +131,10 @@ mod tests {
     #[test]
     fn test_extracts_files_from_zip() {
         let root = tmp_dir();
-        let zip_data = make_zip(&[("model.stl", b"solid\nendsolid\n"), ("readme.txt", b"hello")]);
+        let zip_data = make_zip(&[
+            ("model.stl", b"solid\nendsolid\n"),
+            ("readme.txt", b"hello"),
+        ]);
         let zip_path = root.join("pack.zip");
         std::fs::write(&zip_path, &zip_data).unwrap();
 
@@ -195,6 +197,10 @@ mod tests {
         std::fs::remove_dir_all(&root).ok();
 
         assert_eq!(results[0].files_extracted, 3);
-        assert!(dest.join("parts/base.stl").to_string_lossy().contains("parts"));
+        assert!(
+            dest.join("parts/base.stl")
+                .to_string_lossy()
+                .contains("parts")
+        );
     }
 }

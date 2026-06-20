@@ -16,15 +16,18 @@ pub struct RenameCandidate {
 /// Files where the computed name matches the current name are excluded.
 /// Files where the destination already exists are excluded (no overwrite).
 pub fn plan(conn: &Connection, root: &Path) -> Result<Vec<RenameCandidate>> {
-    let models = db::search(conn, &SearchParams {
-        query: None,
-        designer: None,
-        folder: None,
-        format: Some("3MF"),
-        project: None,
-        limit: 100_000,
-        offset: 0,
-    })?;
+    let models = db::search(
+        conn,
+        &SearchParams {
+            query: None,
+            designer: None,
+            folder: None,
+            format: Some("3MF"),
+            project: None,
+            limit: 100_000,
+            offset: 0,
+        },
+    )?;
 
     let mut candidates = Vec::new();
 
@@ -41,10 +44,7 @@ pub fn plan(conn: &Connection, root: &Path) -> Result<Vec<RenameCandidate>> {
             continue;
         }
 
-        let new_path = old_path
-            .parent()
-            .unwrap_or(root)
-            .join(&new_name);
+        let new_path = old_path.parent().unwrap_or(root).join(&new_name);
 
         if new_path.exists() {
             tracing::debug!("skipping {}: destination already exists", m.filename);

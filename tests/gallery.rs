@@ -14,8 +14,16 @@ async fn gallery_returns_200() {
 async fn gallery_is_html() {
     let app = spawn_seeded().await;
     let resp = app.get("/").await;
-    let ct = resp.headers().get("content-type").unwrap().to_str().unwrap();
-    assert!(ct.contains("text/html"), "expected HTML content-type, got {ct}");
+    let ct = resp
+        .headers()
+        .get("content-type")
+        .unwrap()
+        .to_str()
+        .unwrap();
+    assert!(
+        ct.contains("text/html"),
+        "expected HTML content-type, got {ct}"
+    );
 }
 
 #[tokio::test]
@@ -23,7 +31,7 @@ async fn gallery_shows_both_models() {
     let app = spawn_seeded().await;
     let body = app.get("/").await.text().await.unwrap();
     assert!(body.contains("Dragon"), "gallery should list Dragon");
-    assert!(body.contains("Bunny"),  "gallery should list Bunny");
+    assert!(body.contains("Bunny"), "gallery should list Bunny");
 }
 
 #[tokio::test]
@@ -39,16 +47,28 @@ async fn gallery_shows_total_count() {
 async fn search_returns_partial_html_not_full_page() {
     let app = spawn_seeded().await;
     let body = app.get("/search").await.text().await.unwrap();
-    assert!(!body.contains("<!DOCTYPE"), "search should return a fragment");
-    assert!(body.contains("class=\"card\""), "fragment should contain cards");
+    assert!(
+        !body.contains("<!DOCTYPE"),
+        "search should return a fragment"
+    );
+    assert!(
+        body.contains("class=\"card\""),
+        "fragment should contain cards"
+    );
 }
 
 #[tokio::test]
 async fn search_by_title_filters_correctly() {
     let app = spawn_seeded().await;
     let body = app.get("/search?q=dragon").await.text().await.unwrap();
-    assert!(body.contains("Dragon"), "dragon search should return Dragon");
-    assert!(!body.contains("Bunny"),  "dragon search should not return Bunny");
+    assert!(
+        body.contains("Dragon"),
+        "dragon search should return Dragon"
+    );
+    assert!(
+        !body.contains("Bunny"),
+        "dragon search should not return Bunny"
+    );
 }
 
 #[tokio::test]
@@ -56,15 +76,21 @@ async fn search_by_format_stl() {
     let app = spawn_seeded().await;
     let body = app.get("/search?format=STL").await.text().await.unwrap();
     assert!(body.contains("Dragon"), "STL filter should return Dragon");
-    assert!(!body.contains("Bunny"),  "STL filter should not return Bunny");
+    assert!(
+        !body.contains("Bunny"),
+        "STL filter should not return Bunny"
+    );
 }
 
 #[tokio::test]
 async fn search_by_format_3mf() {
     let app = spawn_seeded().await;
     let body = app.get("/search?format=3MF").await.text().await.unwrap();
-    assert!(body.contains("Bunny"),   "3MF filter should return Bunny");
-    assert!(!body.contains("Dragon"), "3MF filter should not return Dragon");
+    assert!(body.contains("Bunny"), "3MF filter should return Bunny");
+    assert!(
+        !body.contains("Dragon"),
+        "3MF filter should not return Dragon"
+    );
 }
 
 #[tokio::test]
@@ -81,8 +107,8 @@ async fn search_empty_query_returns_all() {
 async fn model_detail_returns_200_and_content() {
     let app = spawn_seeded().await;
     let body = app.get("/model/1").await.text().await.unwrap();
-    assert!(body.contains("Dragon"),  "detail should show model title");
-    assert!(body.contains("Alice"),   "detail should show designer");
+    assert!(body.contains("Dragon"), "detail should show model title");
+    assert!(body.contains("Alice"), "detail should show designer");
 }
 
 #[tokio::test]

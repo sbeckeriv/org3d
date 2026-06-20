@@ -46,7 +46,11 @@ fn extract_binary(data: &[u8]) -> Result<StlMeta> {
         .trim_end_matches('\0')
         .trim()
         .to_string();
-    let header = if header_str.is_empty() { None } else { Some(header_str) };
+    let header = if header_str.is_empty() {
+        None
+    } else {
+        Some(header_str)
+    };
 
     let triangle_count = u32::from_le_bytes(data[80..84].try_into().unwrap()) as u64;
 
@@ -75,9 +79,21 @@ fn extract_binary(data: &[u8]) -> Result<StlMeta> {
 
     Ok(StlMeta {
         triangle_count,
-        dim_x: if triangle_count > 0 { Some(max[0] - min[0]) } else { None },
-        dim_y: if triangle_count > 0 { Some(max[1] - min[1]) } else { None },
-        dim_z: if triangle_count > 0 { Some(max[2] - min[2]) } else { None },
+        dim_x: if triangle_count > 0 {
+            Some(max[0] - min[0])
+        } else {
+            None
+        },
+        dim_y: if triangle_count > 0 {
+            Some(max[1] - min[1])
+        } else {
+            None
+        },
+        dim_z: if triangle_count > 0 {
+            Some(max[2] - min[2])
+        } else {
+            None
+        },
         name: None,
         header,
     })
@@ -117,9 +133,21 @@ fn extract_ascii(data: &[u8]) -> Result<StlMeta> {
 
     Ok(StlMeta {
         triangle_count: triangles,
-        dim_x: if triangles > 0 { Some(max[0] - min[0]) } else { None },
-        dim_y: if triangles > 0 { Some(max[1] - min[1]) } else { None },
-        dim_z: if triangles > 0 { Some(max[2] - min[2]) } else { None },
+        dim_x: if triangles > 0 {
+            Some(max[0] - min[0])
+        } else {
+            None
+        },
+        dim_y: if triangles > 0 {
+            Some(max[1] - min[1])
+        } else {
+            None
+        },
+        dim_z: if triangles > 0 {
+            Some(max[2] - min[2])
+        } else {
+            None
+        },
         name,
         header: None,
     })
@@ -155,8 +183,18 @@ mod tests {
     #[test]
     fn test_binary_triangle_count_and_bbox() {
         let tris = [
-            [[0.0f32, 0.0, 1.0], [0.0, 0.0, 0.0], [10.0, 0.0, 0.0], [0.0, 20.0, 0.0]],
-            [[0.0f32, 0.0, 1.0], [10.0, 0.0, 0.0], [10.0, 0.0, 5.0], [0.0, 20.0, 0.0]],
+            [
+                [0.0f32, 0.0, 1.0],
+                [0.0, 0.0, 0.0],
+                [10.0, 0.0, 0.0],
+                [0.0, 20.0, 0.0],
+            ],
+            [
+                [0.0f32, 0.0, 1.0],
+                [10.0, 0.0, 0.0],
+                [10.0, 0.0, 5.0],
+                [0.0, 20.0, 0.0],
+            ],
         ];
         let data = make_binary_stl("", &tris);
         let path = tmp_path("binary.stl");
@@ -165,17 +203,24 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         assert_eq!(meta.triangle_count, 2);
-        assert!((meta.dim_x.unwrap() - 10.0).abs() < 0.001, "x dim should be 10");
-        assert!((meta.dim_y.unwrap() - 20.0).abs() < 0.001, "y dim should be 20");
-        assert!((meta.dim_z.unwrap() -  5.0).abs() < 0.001, "z dim should be 5");
+        assert!(
+            (meta.dim_x.unwrap() - 10.0).abs() < 0.001,
+            "x dim should be 10"
+        );
+        assert!(
+            (meta.dim_y.unwrap() - 20.0).abs() < 0.001,
+            "y dim should be 20"
+        );
+        assert!(
+            (meta.dim_z.unwrap() - 5.0).abs() < 0.001,
+            "z dim should be 5"
+        );
         assert!(meta.name.is_none());
     }
 
     #[test]
     fn test_binary_header_string() {
-        let data = make_binary_stl("PrusaSlicer 2.7", &[
-            [[0.0f32; 3]; 4],
-        ]);
+        let data = make_binary_stl("PrusaSlicer 2.7", &[[[0.0f32; 3]; 4]]);
         // Single all-zero triangle: size is 84 + 50 = 134, tri count = 1 → detected as binary
         let path = tmp_path("header.stl");
         std::fs::write(&path, &data).unwrap();
@@ -223,7 +268,7 @@ mod tests {
         header[..5].copy_from_slice(b"solid");
         let mut data = header.to_vec();
         data.extend_from_slice(&1u32.to_le_bytes()); // 1 triangle
-        data.extend_from_slice(&[0u8; 50]);           // 1 × 50 bytes
+        data.extend_from_slice(&[0u8; 50]); // 1 × 50 bytes
         // Total: 84 + 50 = 134 bytes → binary
         let path = tmp_path("ambiguous.stl");
         std::fs::write(&path, &data).unwrap();
@@ -231,6 +276,9 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         assert_eq!(meta.triangle_count, 1);
-        assert!(meta.name.is_none(), "binary STL should not have a solid name");
+        assert!(
+            meta.name.is_none(),
+            "binary STL should not have a solid name"
+        );
     }
 }

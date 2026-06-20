@@ -88,23 +88,30 @@ pub(crate) fn migrate(conn: &Connection) -> Result<()> {
     let _ = conn.execute("ALTER TABLE models ADD COLUMN project_name TEXT", []);
 
     // If the FTS table predates project_name, drop and rebuild it cleanly.
-    let fts_sql: String = conn.query_row(
-        "SELECT COALESCE(sql, '') FROM sqlite_master WHERE name = 'models_fts'",
-        [], |r| r.get(0),
-    ).unwrap_or_default();
+    let fts_sql: String = conn
+        .query_row(
+            "SELECT COALESCE(sql, '') FROM sqlite_master WHERE name = 'models_fts'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap_or_default();
     if !fts_sql.contains("project_name") {
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             DROP TABLE IF EXISTS models_fts;
             DROP TRIGGER IF EXISTS models_ai;
             DROP TRIGGER IF EXISTS models_ad;
             DROP TRIGGER IF EXISTS models_au;
-        ")?;
+        ",
+        )?;
         // Backfill before triggers are recreated so the UPDATE doesn't double-write FTS.
-        conn.execute_batch("
+        conn.execute_batch(
+            "
             UPDATE models
             SET project_name = (SELECT name FROM projects WHERE id = models.project_id)
             WHERE project_id IS NOT NULL;
-        ")?;
+        ",
+        )?;
         conn.execute_batch("
             CREATE VIRTUAL TABLE models_fts USING fts5(
                 title, designer, description, filename, folder, project_name,
@@ -191,9 +198,23 @@ pub fn upsert(conn: &Connection, m: &ModelRow) -> Result<i64> {
            thumbnail_path=COALESCE(excluded.thumbnail_path, thumbnail_path),
            indexed_at=datetime('now')",
         params![
-            m.path, m.filename, m.folder, m.format, m.file_size,
-            m.title, m.designer, m.description, m.application, m.license, m.created_at,
-            m.object_count, m.triangle_count, m.dim_x, m.dim_y, m.dim_z, m.thumbnail_path
+            m.path,
+            m.filename,
+            m.folder,
+            m.format,
+            m.file_size,
+            m.title,
+            m.designer,
+            m.description,
+            m.application,
+            m.license,
+            m.created_at,
+            m.object_count,
+            m.triangle_count,
+            m.dim_x,
+            m.dim_y,
+            m.dim_z,
+            m.thumbnail_path
         ],
     )?;
     Ok(conn.last_insert_rowid())
@@ -214,11 +235,18 @@ pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
         "SELECT p.id, p.name, p.notes, COUNT(m.id) as model_count
          FROM projects p
          LEFT JOIN models m ON m.project_id = p.id
-         GROUP BY p.id ORDER BY p.name COLLATE NOCASE"
+         GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
     )?;
-    let rows = stmt.query_map([], |r| {
-        Ok(Project { id: r.get(0)?, name: r.get(1)?, notes: r.get(2)?, model_count: r.get(3)? })
-    })?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok(Project {
+                id: r.get(0)?,
+                name: r.get(1)?,
+                notes: r.get(2)?,
+                model_count: r.get(3)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows)
 }
 
@@ -227,11 +255,9 @@ pub fn find_or_create_project(conn: &Connection, name: &str) -> Result<i64> {
         "INSERT INTO projects (name) VALUES (?1) ON CONFLICT(name) DO NOTHING",
         [name],
     )?;
-    let id: i64 = conn.query_row(
-        "SELECT id FROM projects WHERE name = ?1",
-        [name],
-        |r| r.get(0),
-    )?;
+    let id: i64 = conn.query_row("SELECT id FROM projects WHERE name = ?1", [name], |r| {
+        r.get(0)
+    })?;
     Ok(id)
 }
 
@@ -288,7 +314,9 @@ pub fn search(conn: &Connection, p: &SearchParams) -> Result<Vec<ModelRow>> {
             ORDER BY rank
             LIMIT ?6 OFFSET ?7";
         match conn.prepare(sql)?.query_map(
-            params![fts_query, p.designer, p.folder, p.format, p.project, p.limit, p.offset],
+            params![
+                fts_query, p.designer, p.folder, p.format, p.project, p.limit, p.offset
+            ],
             row_to_model,
         ) {
             Ok(mapped) => mapped.collect::<rusqlite::Result<Vec<_>>>()?,
@@ -310,10 +338,12 @@ pub fn search(conn: &Connection, p: &SearchParams) -> Result<Vec<ModelRow>> {
               AND (?4 IS NULL OR project_id = ?4)
             ORDER BY COALESCE(title, filename) COLLATE NOCASE
             LIMIT ?5 OFFSET ?6";
-        conn.prepare(sql)?.query_map(
-            params![p.designer, p.folder, p.format, p.project, p.limit, p.offset],
-            row_to_model,
-        )?.collect::<rusqlite::Result<Vec<_>>>()?
+        conn.prepare(sql)?
+            .query_map(
+                params![p.designer, p.folder, p.format, p.project, p.limit, p.offset],
+                row_to_model,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?
     };
     Ok(rows)
 }
@@ -324,7 +354,7 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<Option<ModelRow>> {
                 title, designer, description, application, license,
                 created_at, object_count, triangle_count,
                 dim_x, dim_y, dim_z, thumbnail_path, project_id
-         FROM models WHERE id = ?1"
+         FROM models WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map([id], row_to_model)?;
     Ok(rows.next().transpose()?)
@@ -334,16 +364,17 @@ pub fn list_designers(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
         "SELECT DISTINCT designer FROM models WHERE designer IS NOT NULL ORDER BY designer COLLATE NOCASE"
     )?;
-    let rows = stmt.query_map([], |r| r.get(0))?
+    let rows = stmt
+        .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<Vec<String>>>()?;
     Ok(rows)
 }
 
 pub fn list_folders(conn: &Connection) -> Result<Vec<String>> {
-    let mut stmt = conn.prepare(
-        "SELECT DISTINCT folder FROM models ORDER BY folder COLLATE NOCASE"
-    )?;
-    let rows = stmt.query_map([], |r| r.get(0))?
+    let mut stmt =
+        conn.prepare("SELECT DISTINCT folder FROM models ORDER BY folder COLLATE NOCASE")?;
+    let rows = stmt
+        .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<Vec<String>>>()?;
     Ok(rows)
 }
@@ -380,7 +411,12 @@ pub fn search_count(conn: &Connection, p: &SearchParams) -> Result<i64> {
     Ok(n)
 }
 
-pub fn rename_model(conn: &Connection, old_path: &str, new_path: &str, new_filename: &str) -> Result<()> {
+pub fn rename_model(
+    conn: &Connection,
+    old_path: &str,
+    new_path: &str,
+    new_filename: &str,
+) -> Result<()> {
     conn.execute(
         "UPDATE models SET path = ?1, filename = ?2 WHERE path = ?3",
         params![new_path, new_filename, old_path],
@@ -390,25 +426,25 @@ pub fn rename_model(conn: &Connection, old_path: &str, new_path: &str, new_filen
 
 fn row_to_model(r: &rusqlite::Row) -> rusqlite::Result<ModelRow> {
     Ok(ModelRow {
-        id:             r.get(0)?,
-        path:           r.get(1)?,
-        filename:       r.get(2)?,
-        folder:         r.get(3)?,
-        format:         r.get(4)?,
-        file_size:      r.get(5)?,
-        title:          r.get(6)?,
-        designer:       r.get(7)?,
-        description:    r.get(8)?,
-        application:    r.get(9)?,
-        license:        r.get(10)?,
-        created_at:     r.get(11)?,
-        object_count:   r.get(12)?,
+        id: r.get(0)?,
+        path: r.get(1)?,
+        filename: r.get(2)?,
+        folder: r.get(3)?,
+        format: r.get(4)?,
+        file_size: r.get(5)?,
+        title: r.get(6)?,
+        designer: r.get(7)?,
+        description: r.get(8)?,
+        application: r.get(9)?,
+        license: r.get(10)?,
+        created_at: r.get(11)?,
+        object_count: r.get(12)?,
         triangle_count: r.get(13)?,
-        dim_x:          r.get(14)?,
-        dim_y:          r.get(15)?,
-        dim_z:          r.get(16)?,
+        dim_x: r.get(14)?,
+        dim_y: r.get(15)?,
+        dim_z: r.get(16)?,
         thumbnail_path: r.get(17)?,
-        project_id:     r.get(18)?,
+        project_id: r.get(18)?,
     })
 }
 
@@ -418,7 +454,8 @@ mod tests {
 
     fn test_db() -> Connection {
         let conn = Connection::open_in_memory().unwrap();
-        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;").unwrap();
+        conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")
+            .unwrap();
         migrate(&conn).unwrap();
         conn
     }
@@ -450,7 +487,13 @@ mod tests {
     #[test]
     fn test_upsert_and_retrieve() {
         let conn = test_db();
-        let row = sample_row("/tmp/dragon.3mf", "Dragon Model", "DesignerA", "/miniatures", "3MF");
+        let row = sample_row(
+            "/tmp/dragon.3mf",
+            "Dragon Model",
+            "DesignerA",
+            "/miniatures",
+            "3MF",
+        );
         upsert(&conn, &row).unwrap();
 
         let result = get_by_id(&conn, 1).unwrap().expect("row should exist");
@@ -470,7 +513,9 @@ mod tests {
         updated.triangle_count = Some(200);
         upsert(&conn, &updated).unwrap();
 
-        let count: i64 = conn.query_row("SELECT COUNT(*) FROM models", [], |r| r.get(0)).unwrap();
+        let count: i64 = conn
+            .query_row("SELECT COUNT(*) FROM models", [], |r| r.get(0))
+            .unwrap();
         assert_eq!(count, 1, "should not insert duplicate");
 
         let result = get_by_id(&conn, 1).unwrap().expect("row should exist");
@@ -481,25 +526,65 @@ mod tests {
     #[test]
     fn test_search_no_filter_returns_all() {
         let conn = test_db();
-        upsert(&conn, &sample_row("/tmp/a.stl", "Alpha", "Alice", "/folder1", "STL")).unwrap();
-        upsert(&conn, &sample_row("/tmp/b.stl", "Beta",  "Bob",   "/folder2", "STL")).unwrap();
-        upsert(&conn, &sample_row("/tmp/c.3mf", "Gamma", "Alice", "/folder1", "3MF")).unwrap();
+        upsert(
+            &conn,
+            &sample_row("/tmp/a.stl", "Alpha", "Alice", "/folder1", "STL"),
+        )
+        .unwrap();
+        upsert(
+            &conn,
+            &sample_row("/tmp/b.stl", "Beta", "Bob", "/folder2", "STL"),
+        )
+        .unwrap();
+        upsert(
+            &conn,
+            &sample_row("/tmp/c.3mf", "Gamma", "Alice", "/folder1", "3MF"),
+        )
+        .unwrap();
 
-        let results = search(&conn, &SearchParams {
-            query: None, designer: None, folder: None, format: None, project: None, limit: 50, offset: 0,
-        }).unwrap();
+        let results = search(
+            &conn,
+            &SearchParams {
+                query: None,
+                designer: None,
+                folder: None,
+                format: None,
+                project: None,
+                limit: 50,
+                offset: 0,
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 3);
     }
 
     #[test]
     fn test_fts_search_by_title() {
         let conn = test_db();
-        upsert(&conn, &sample_row("/tmp/a.stl", "Gnarly Dragon", "Alice", "/", "STL")).unwrap();
-        upsert(&conn, &sample_row("/tmp/b.stl", "Cute Bunny",   "Bob",   "/", "STL")).unwrap();
+        upsert(
+            &conn,
+            &sample_row("/tmp/a.stl", "Gnarly Dragon", "Alice", "/", "STL"),
+        )
+        .unwrap();
+        upsert(
+            &conn,
+            &sample_row("/tmp/b.stl", "Cute Bunny", "Bob", "/", "STL"),
+        )
+        .unwrap();
 
-        let results = search(&conn, &SearchParams {
-            query: Some("dragon"), designer: None, folder: None, format: None, project: None, limit: 50, offset: 0,
-        }).unwrap();
+        let results = search(
+            &conn,
+            &SearchParams {
+                query: Some("dragon"),
+                designer: None,
+                folder: None,
+                format: None,
+                project: None,
+                limit: 50,
+                offset: 0,
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].title.as_deref(), Some("Gnarly Dragon"));
     }
@@ -507,13 +592,27 @@ mod tests {
     #[test]
     fn test_fts_search_by_project_name() {
         let conn = test_db();
-        upsert(&conn, &sample_row("/tmp/a.3mf", "Dragon", "Alice", "/", "3MF")).unwrap();
+        upsert(
+            &conn,
+            &sample_row("/tmp/a.3mf", "Dragon", "Alice", "/", "3MF"),
+        )
+        .unwrap();
         let pid = find_or_create_project(&conn, "Fallout Builds").unwrap();
         assign_project(&conn, 1, pid).unwrap();
 
-        let results = search(&conn, &SearchParams {
-            query: Some("fallout"), designer: None, folder: None, format: None, project: None, limit: 50, offset: 0,
-        }).unwrap();
+        let results = search(
+            &conn,
+            &SearchParams {
+                query: Some("fallout"),
+                designer: None,
+                folder: None,
+                format: None,
+                project: None,
+                limit: 50,
+                offset: 0,
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 1, "should find model via project name");
         assert_eq!(results[0].title.as_deref(), Some("Dragon"));
     }
@@ -521,12 +620,26 @@ mod tests {
     #[test]
     fn test_fts_search_by_description() {
         let conn = test_db();
-        upsert(&conn, &sample_row("/tmp/a.stl", "Model A", "Alice", "/", "STL")).unwrap();
+        upsert(
+            &conn,
+            &sample_row("/tmp/a.stl", "Model A", "Alice", "/", "STL"),
+        )
+        .unwrap();
         // description is auto-set to "Description of Model A"
 
-        let results = search(&conn, &SearchParams {
-            query: Some("Description"), designer: None, folder: None, format: None, project: None, limit: 50, offset: 0,
-        }).unwrap();
+        let results = search(
+            &conn,
+            &SearchParams {
+                query: Some("Description"),
+                designer: None,
+                folder: None,
+                format: None,
+                project: None,
+                limit: 50,
+                offset: 0,
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
     }
 
@@ -534,11 +647,21 @@ mod tests {
     fn test_filter_by_designer() {
         let conn = test_db();
         upsert(&conn, &sample_row("/tmp/a.stl", "A", "Alice", "/", "STL")).unwrap();
-        upsert(&conn, &sample_row("/tmp/b.stl", "B", "Bob",   "/", "STL")).unwrap();
+        upsert(&conn, &sample_row("/tmp/b.stl", "B", "Bob", "/", "STL")).unwrap();
 
-        let results = search(&conn, &SearchParams {
-            query: None, designer: Some("Alice"), folder: None, format: None, project: None, limit: 50, offset: 0,
-        }).unwrap();
+        let results = search(
+            &conn,
+            &SearchParams {
+                query: None,
+                designer: Some("Alice"),
+                folder: None,
+                format: None,
+                project: None,
+                limit: 50,
+                offset: 0,
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].designer.as_deref(), Some("Alice"));
     }
@@ -549,9 +672,19 @@ mod tests {
         upsert(&conn, &sample_row("/tmp/a.stl", "A", "Alice", "/", "STL")).unwrap();
         upsert(&conn, &sample_row("/tmp/b.3mf", "B", "Alice", "/", "3MF")).unwrap();
 
-        let results = search(&conn, &SearchParams {
-            query: None, designer: None, folder: None, format: Some("3MF"), project: None, limit: 50, offset: 0,
-        }).unwrap();
+        let results = search(
+            &conn,
+            &SearchParams {
+                query: None,
+                designer: None,
+                folder: None,
+                format: Some("3MF"),
+                project: None,
+                limit: 50,
+                offset: 0,
+            },
+        )
+        .unwrap();
         assert_eq!(results.len(), 1);
         assert_eq!(results[0].format, "3MF");
     }
@@ -559,12 +692,16 @@ mod tests {
     #[test]
     fn test_list_designers_distinct_sorted() {
         let conn = test_db();
-        upsert(&conn, &sample_row("/tmp/a.stl", "A", "Zara",  "/", "STL")).unwrap();
+        upsert(&conn, &sample_row("/tmp/a.stl", "A", "Zara", "/", "STL")).unwrap();
         upsert(&conn, &sample_row("/tmp/b.stl", "B", "Alice", "/", "STL")).unwrap();
         upsert(&conn, &sample_row("/tmp/c.stl", "C", "Alice", "/", "STL")).unwrap();
 
         let designers = list_designers(&conn).unwrap();
-        assert_eq!(designers, vec!["Alice", "Zara"], "should be sorted, deduplicated");
+        assert_eq!(
+            designers,
+            vec!["Alice", "Zara"],
+            "should be sorted, deduplicated"
+        );
     }
 
     #[test]
@@ -572,7 +709,7 @@ mod tests {
         let conn = test_db();
         assert_eq!(count(&conn).unwrap(), 0);
         upsert(&conn, &sample_row("/tmp/a.stl", "A", "Alice", "/", "STL")).unwrap();
-        upsert(&conn, &sample_row("/tmp/b.stl", "B", "Bob",   "/", "STL")).unwrap();
+        upsert(&conn, &sample_row("/tmp/b.stl", "B", "Bob", "/", "STL")).unwrap();
         assert_eq!(count(&conn).unwrap(), 2);
     }
 
@@ -583,7 +720,7 @@ mod tests {
         let row = get_by_id(&conn, 1).unwrap().unwrap();
         let dims = row.dims_str().unwrap();
         assert!(dims.contains("50.0"), "x dim should appear");
-        assert!(dims.contains("mm"),   "units should be mm");
+        assert!(dims.contains("mm"), "units should be mm");
     }
 
     #[test]

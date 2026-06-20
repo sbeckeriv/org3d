@@ -76,7 +76,12 @@ async fn main() -> Result<()> {
             let conn = db::open(&cli.db)?;
             tracing::info!("scanning {}", path.display());
             let s = scanner::scan(&conn, &path, &thumb_dir)?;
-            tracing::info!("done: {} scanned, {} indexed, {} errors", s.scanned, s.inserted, s.errors);
+            tracing::info!(
+                "done: {} scanned, {} indexed, {} errors",
+                s.scanned,
+                s.inserted,
+                s.errors
+            );
         }
 
         Cmd::Serve { path, port } => {
@@ -96,9 +101,16 @@ async fn main() -> Result<()> {
             if rescan || existing == 0 {
                 tracing::info!("scanning {}", path.display());
                 let s = scanner::scan(&conn, &path, &thumb_dir)?;
-                tracing::info!("done: {} scanned, {} indexed, {} errors", s.scanned, s.inserted, s.errors);
+                tracing::info!(
+                    "done: {} scanned, {} indexed, {} errors",
+                    s.scanned,
+                    s.inserted,
+                    s.errors
+                );
             } else {
-                tracing::info!("{existing} models already indexed — skipping scan (use --rescan to force)");
+                tracing::info!(
+                    "{existing} models already indexed — skipping scan (use --rescan to force)"
+                );
             }
             drop(conn);
 
@@ -126,7 +138,10 @@ async fn main() -> Result<()> {
                 let n = rename::apply(&conn, &candidates)?;
                 println!("\nRenamed {n} files.");
             } else {
-                println!("\n{} files would be renamed. Run with --apply to proceed.", candidates.len());
+                println!(
+                    "\n{} files would be renamed. Run with --apply to proceed.",
+                    candidates.len()
+                );
             }
         }
 
@@ -138,7 +153,9 @@ async fn main() -> Result<()> {
                 stats.projects_created, stats.models_assigned
             );
             if stats.models_assigned == 0 {
-                println!("Nothing to group — run 'scan' first, or all models are already assigned.");
+                println!(
+                    "Nothing to group — run 'scan' first, or all models are already assigned."
+                );
             }
         }
 
@@ -148,13 +165,23 @@ async fn main() -> Result<()> {
             let total: usize = results.iter().map(|r| r.files_extracted).sum();
             println!("Extracted {} ZIPs, {} files total.", results.len(), total);
             for r in &results {
-                println!("  {} → {} ({} files)", r.zip_path.display(), r.dest_dir.display(), r.files_extracted);
+                println!(
+                    "  {} → {} ({} files)",
+                    r.zip_path.display(),
+                    r.dest_dir.display(),
+                    r.files_extracted
+                );
             }
             if scan {
                 let conn = db::open(&cli.db)?;
                 tracing::info!("re-scanning after extraction");
                 let s = scanner::scan(&conn, &path, &thumb_dir)?;
-                tracing::info!("done: {} scanned, {} indexed, {} errors", s.scanned, s.inserted, s.errors);
+                tracing::info!(
+                    "done: {} scanned, {} indexed, {} errors",
+                    s.scanned,
+                    s.inserted,
+                    s.errors
+                );
             }
         }
     }

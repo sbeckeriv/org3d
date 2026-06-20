@@ -81,9 +81,18 @@ pub fn extract(path: &Path) -> Result<ThreeMfMeta> {
             "triangle" => triangles += 1,
             "vertex" => {
                 has_verts = true;
-                let x: f64 = node.attribute("x").and_then(|v| v.parse().ok()).unwrap_or(0.0);
-                let y: f64 = node.attribute("y").and_then(|v| v.parse().ok()).unwrap_or(0.0);
-                let z: f64 = node.attribute("z").and_then(|v| v.parse().ok()).unwrap_or(0.0);
+                let x: f64 = node
+                    .attribute("x")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0.0);
+                let y: f64 = node
+                    .attribute("y")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0.0);
+                let z: f64 = node
+                    .attribute("z")
+                    .and_then(|v| v.parse().ok())
+                    .unwrap_or(0.0);
                 min[0] = min[0].min(x);
                 min[1] = min[1].min(y);
                 min[2] = min[2].min(z);
@@ -118,17 +127,24 @@ impl Transform {
     }
 
     fn from_attr(s: &str) -> Option<Self> {
-        let v: Vec<f32> = s.split_whitespace().filter_map(|x| x.parse().ok()).collect();
-        if v.len() == 12 { Some(Self(v.try_into().unwrap())) } else { None }
+        let v: Vec<f32> = s
+            .split_whitespace()
+            .filter_map(|x| x.parse().ok())
+            .collect();
+        if v.len() == 12 {
+            Some(Self(v.try_into().unwrap()))
+        } else {
+            None
+        }
     }
 
     fn apply(&self, v: [f32; 3]) -> [f32; 3] {
         let [x, y, z] = v;
         let m = &self.0;
         [
-            m[0]*x + m[3]*y + m[6]*z + m[9],
-            m[1]*x + m[4]*y + m[7]*z + m[10],
-            m[2]*x + m[5]*y + m[8]*z + m[11],
+            m[0] * x + m[3] * y + m[6] * z + m[9],
+            m[1] * x + m[4] * y + m[7] * z + m[10],
+            m[2] * x + m[5] * y + m[8] * z + m[11],
         ]
     }
 }
@@ -145,10 +161,13 @@ pub fn to_binary_stl(path: &Path) -> Result<Vec<u8>> {
 
     // Load every .model file in the ZIP into memory, keyed by normalised path
     let all_names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
-    let mut xml_by_path: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    let mut xml_by_path: std::collections::HashMap<String, String> =
+        std::collections::HashMap::new();
 
     for name in &all_names {
-        if !name.to_lowercase().ends_with(".model") { continue; }
+        if !name.to_lowercase().ends_with(".model") {
+            continue;
+        }
         let key = name.trim_start_matches('/').to_lowercase();
         if let Ok(mut entry) = archive.by_name(name) {
             let mut buf = String::new();
@@ -170,7 +189,7 @@ pub fn to_binary_stl(path: &Path) -> Result<Vec<u8>> {
     let main_doc = roxmltree::Document::parse(&main_xml).context("invalid main model XML")?;
 
     let mut all_verts: Vec<[f32; 3]> = Vec::new();
-    let mut all_tris:  Vec<[u32; 3]> = Vec::new();
+    let mut all_tris: Vec<[u32; 3]> = Vec::new();
 
     // Collect per-object transforms from <build><item objectid transform> so that
     // multi-object standard 3MFs are positioned correctly rather than all overlapping.
@@ -179,7 +198,8 @@ pub fn to_binary_stl(path: &Path) -> Result<Vec<u8>> {
     for node in main_doc.descendants() {
         if node.tag_name().name() == "item" {
             if let Some(oid) = node.attribute("objectid") {
-                let xform = node.attributes()
+                let xform = node
+                    .attributes()
                     .find(|a| a.name() == "transform")
                     .and_then(|a| Transform::from_attr(a.value()))
                     .unwrap_or_else(Transform::identity);
@@ -189,31 +209,48 @@ pub fn to_binary_stl(path: &Path) -> Result<Vec<u8>> {
     }
 
     // Walk every <object> in the main model
-    for obj in main_doc.descendants().filter(|n| n.tag_name().name() == "object") {
+    for obj in main_doc
+        .descendants()
+        .filter(|n| n.tag_name().name() == "object")
+    {
         let obj_type = obj.attribute("type").unwrap_or("model");
-        if obj_type != "model" { continue; }
+        if obj_type != "model" {
+            continue;
+        }
 
-        let build_xform = obj.attribute("id")
+        let build_xform = obj
+            .attribute("id")
             .and_then(|id| build_transforms.get(id))
             .cloned()
             .unwrap_or_else(Transform::identity);
 
         // Case A: Object has a direct <mesh> — simple single-file 3MF.
         if let Some(mesh) = obj.children().find(|n| n.tag_name().name() == "mesh") {
-            add_mesh(mesh, &build_xform, &Transform::identity(), &mut all_verts, &mut all_tris);
+            add_mesh(
+                mesh,
+                &build_xform,
+                &Transform::identity(),
+                &mut all_verts,
+                &mut all_tris,
+            );
             continue;
         }
 
         // Case B: Object has <components> referencing external files (Bambu style).
         // Compose the build-level item transform (outer) with the component transform (inner).
         if let Some(comps) = obj.children().find(|n| n.tag_name().name() == "components") {
-            for comp in comps.children().filter(|n| n.tag_name().name() == "component") {
-                let comp_xform = comp.attributes()
+            for comp in comps
+                .children()
+                .filter(|n| n.tag_name().name() == "component")
+            {
+                let comp_xform = comp
+                    .attributes()
                     .find(|a| a.name() == "transform")
                     .and_then(|a| Transform::from_attr(a.value()))
                     .unwrap_or_else(Transform::identity);
 
-                let ext_path = comp.attributes()
+                let ext_path = comp
+                    .attributes()
                     .find(|a| a.name() == "path")
                     .map(|a| a.value().trim_start_matches('/').to_lowercase());
 
@@ -222,19 +259,30 @@ pub fn to_binary_stl(path: &Path) -> Result<Vec<u8>> {
                 if let Some(ep) = ext_path {
                     if let Some(ext_xml) = xml_by_path.get(&ep) {
                         if let Ok(ext_doc) = roxmltree::Document::parse(ext_xml) {
-                            for ext_obj in ext_doc.descendants()
+                            for ext_obj in ext_doc
+                                .descendants()
                                 .filter(|n| n.tag_name().name() == "object")
                             {
                                 if let Some(wid) = want_id {
-                                    if ext_obj.attribute("id") != Some(wid) { continue; }
+                                    if ext_obj.attribute("id") != Some(wid) {
+                                        continue;
+                                    }
                                 }
                                 let ot = ext_obj.attribute("type").unwrap_or("model");
-                                if ot != "model" { continue; }
+                                if ot != "model" {
+                                    continue;
+                                }
 
-                                if let Some(mesh) = ext_obj.children()
-                                    .find(|n| n.tag_name().name() == "mesh")
+                                if let Some(mesh) =
+                                    ext_obj.children().find(|n| n.tag_name().name() == "mesh")
                                 {
-                                    add_mesh(mesh, &build_xform, &comp_xform, &mut all_verts, &mut all_tris);
+                                    add_mesh(
+                                        mesh,
+                                        &build_xform,
+                                        &comp_xform,
+                                        &mut all_verts,
+                                        &mut all_tris,
+                                    );
                                 }
                             }
                         }
@@ -261,16 +309,31 @@ fn add_mesh(
     let base = all_verts.len() as u32;
 
     if let Some(verts_node) = mesh.children().find(|n| n.tag_name().name() == "vertices") {
-        for v in verts_node.children().filter(|n| n.tag_name().name() == "vertex") {
-            let x = v.attribute("x").and_then(|s| s.parse().ok()).unwrap_or(0.0f32);
-            let y = v.attribute("y").and_then(|s| s.parse().ok()).unwrap_or(0.0f32);
-            let z = v.attribute("z").and_then(|s| s.parse().ok()).unwrap_or(0.0f32);
+        for v in verts_node
+            .children()
+            .filter(|n| n.tag_name().name() == "vertex")
+        {
+            let x = v
+                .attribute("x")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0f32);
+            let y = v
+                .attribute("y")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0f32);
+            let z = v
+                .attribute("z")
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(0.0f32);
             all_verts.push(outer.apply(inner.apply([x, y, z])));
         }
     }
 
     if let Some(tris_node) = mesh.children().find(|n| n.tag_name().name() == "triangles") {
-        for t in tris_node.children().filter(|n| n.tag_name().name() == "triangle") {
+        for t in tris_node
+            .children()
+            .filter(|n| n.tag_name().name() == "triangle")
+        {
             let v1: u32 = t.attribute("v1").and_then(|s| s.parse().ok()).unwrap_or(0);
             let v2: u32 = t.attribute("v2").and_then(|s| s.parse().ok()).unwrap_or(0);
             let v3: u32 = t.attribute("v3").and_then(|s| s.parse().ok()).unwrap_or(0);
@@ -288,7 +351,9 @@ fn write_binary_stl(verts: &[[f32; 3]], tris: &[[u32; 3]]) -> Vec<u8> {
         buf.extend_from_slice(&[0u8; 12]);
         for &vi in tri {
             let v = verts.get(vi as usize).copied().unwrap_or([0.0; 3]);
-            for f in v { buf.extend_from_slice(&f.to_le_bytes()); }
+            for f in v {
+                buf.extend_from_slice(&f.to_le_bytes());
+            }
         }
         buf.extend_from_slice(&[0u8; 2]); // attribute byte count
     }
@@ -410,9 +475,8 @@ mod tests {
                 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00, 0x01, // 1×1
                 0x08, 0x02, 0x00, 0x00, 0x00, 0x90, 0x77, 0x53, // 8bit RGB
                 0xde, 0x00, 0x00, 0x00, 0x0c, 0x49, 0x44, 0x41, // IDAT
-                0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00,
-                0x00, 0x00, 0x02, 0x00, 0x01, 0xe2, 0x21, 0xbc,
-                0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, // IEND
+                0x54, 0x08, 0xd7, 0x63, 0xf8, 0xcf, 0xc0, 0x00, 0x00, 0x00, 0x02, 0x00, 0x01, 0xe2,
+                0x21, 0xbc, 0x33, 0x00, 0x00, 0x00, 0x00, 0x49, 0x45, 0x4e, // IEND
                 0x44, 0xae, 0x42, 0x60, 0x82,
             ];
             zip.start_file("Metadata/plate_1.png", opts).unwrap();
@@ -458,7 +522,7 @@ mod tests {
         assert_eq!(meta.object_count, Some(1));
         assert!((meta.dim_x.unwrap() - 10.0).abs() < 0.001);
         assert!((meta.dim_y.unwrap() - 20.0).abs() < 0.001);
-        assert!((meta.dim_z.unwrap() -  5.0).abs() < 0.001);
+        assert!((meta.dim_z.unwrap() - 5.0).abs() < 0.001);
     }
 
     #[test]
@@ -470,7 +534,10 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         let thumb = meta.thumbnail.expect("thumbnail should be present");
-        assert!(thumb.starts_with(&[0x89, 0x50, 0x4e, 0x47]), "should start with PNG magic");
+        assert!(
+            thumb.starts_with(&[0x89, 0x50, 0x4e, 0x47]),
+            "should start with PNG magic"
+        );
     }
 
     #[test]
@@ -488,7 +555,10 @@ mod tests {
     fn test_html_stripped_from_description() {
         let data = make_3mf(
             // Real Makerworld files HTML-encode the markup inside the XML value
-            &[("Description", "&lt;p&gt;Hello &lt;strong&gt;world&lt;/strong&gt;&lt;/p&gt;")],
+            &[(
+                "Description",
+                "&lt;p&gt;Hello &lt;strong&gt;world&lt;/strong&gt;&lt;/p&gt;",
+            )],
             false,
         );
         let path = tmp_path("html.3mf");
@@ -547,7 +617,8 @@ mod tests {
         zip.write_all(main.as_bytes()).unwrap();
 
         for (oid, _, xml) in components {
-            zip.start_file(format!("3D/Objects/object_{oid}.model"), opts).unwrap();
+            zip.start_file(format!("3D/Objects/object_{oid}.model"), opts)
+                .unwrap();
             zip.write_all(xml.as_bytes()).unwrap();
         }
 
@@ -590,7 +661,7 @@ mod tests {
         let obj1 = make_obj_xml_id(1, 10.0, 10.0, 10.0);
         let obj2 = make_obj_xml_id(2, 10.0, 10.0, 10.0);
         let data = make_bambu_3mf(&[
-            (1, "1 0 0 0 1 0 0 0 1 0 0 0",   &obj1),
+            (1, "1 0 0 0 1 0 0 0 1 0 0 0", &obj1),
             (2, "1 0 0 0 1 0 0 0 1 100 0 0", &obj2),
         ]);
         let path = tmp_path("stl_transform.3mf");
@@ -607,11 +678,14 @@ mod tests {
             let base = 84 + i * 50 + 12;
             for v in 0..3usize {
                 let off = base + v * 12;
-                let x = f32::from_le_bytes(stl[off..off+4].try_into().unwrap());
+                let x = f32::from_le_bytes(stl[off..off + 4].try_into().unwrap());
                 max_x = max_x.max(x);
             }
         }
-        assert!(max_x > 100.0, "translated instance should have x > 100, got {max_x}");
+        assert!(
+            max_x > 100.0,
+            "translated instance should have x > 100, got {max_x}"
+        );
     }
 
     #[test]
@@ -630,7 +704,10 @@ mod tests {
         std::fs::remove_file(&path).ok();
 
         let tri_count = u32::from_le_bytes(stl[80..84].try_into().unwrap());
-        assert_eq!(tri_count, 4, "each component instance should add its own triangles");
+        assert_eq!(
+            tri_count, 4,
+            "each component instance should add its own triangles"
+        );
     }
 
     #[test]
@@ -675,11 +752,14 @@ mod tests {
             let base = 84 + i * 50 + 12;
             for v in 0..3usize {
                 let off = base + v * 12;
-                let x = f32::from_le_bytes(stl[off..off+4].try_into().unwrap());
+                let x = f32::from_le_bytes(stl[off..off + 4].try_into().unwrap());
                 max_x = max_x.max(x);
             }
         }
-        assert!(max_x > 100.0, "build-translated object should have x > 100, got {max_x}");
+        assert!(
+            max_x > 100.0,
+            "build-translated object should have x > 100, got {max_x}"
+        );
     }
 
     #[test]
@@ -719,9 +799,9 @@ mod tests {
             let base = 84 + i * 50 + 12; // skip normal
             for v in 0..3usize {
                 let off = base + v * 12;
-                let x = f32::from_le_bytes(stl[off..off+4].try_into().unwrap());
-                let y = f32::from_le_bytes(stl[off+4..off+8].try_into().unwrap());
-                let z = f32::from_le_bytes(stl[off+8..off+12].try_into().unwrap());
+                let x = f32::from_le_bytes(stl[off..off + 4].try_into().unwrap());
+                let y = f32::from_le_bytes(stl[off + 4..off + 8].try_into().unwrap());
+                let z = f32::from_le_bytes(stl[off + 8..off + 12].try_into().unwrap());
                 max_x = max_x.max(x);
                 max_y = max_y.max(y);
                 max_z = max_z.max(z);

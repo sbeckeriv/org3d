@@ -15,12 +15,14 @@ pub struct AutogroupStats {
 /// - Only groups folders that contain ≥2 unassigned models.
 /// - Project name is derived from the deepest path segment.
 pub fn run(conn: &Connection) -> Result<AutogroupStats> {
-    let mut stats = AutogroupStats { projects_created: 0, models_assigned: 0 };
+    let mut stats = AutogroupStats {
+        projects_created: 0,
+        models_assigned: 0,
+    };
 
     // Collect unassigned models grouped by folder
-    let mut stmt = conn.prepare(
-        "SELECT id, folder FROM models WHERE project_id IS NULL ORDER BY folder",
-    )?;
+    let mut stmt =
+        conn.prepare("SELECT id, folder FROM models WHERE project_id IS NULL ORDER BY folder")?;
     let pairs: Vec<(i64, String)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
@@ -82,10 +84,7 @@ pub fn folder_to_project_name(folder: &str) -> String {
         .collect();
 
     // Collapse runs of spaces and title-case
-    let words: Vec<String> = with_spaces
-        .split_whitespace()
-        .map(title_word)
-        .collect();
+    let words: Vec<String> = with_spaces.split_whitespace().map(title_word).collect();
 
     words.join(" ")
 }
@@ -116,9 +115,14 @@ fn strip_id_suffix(s: &str) -> &str {
 
 /// Title-case a single word, preserving all-caps acronyms.
 fn title_word(w: &str) -> String {
-    if w.is_empty() { return w.to_string(); }
+    if w.is_empty() {
+        return w.to_string();
+    }
     // Keep short all-caps words (like "X1C", "AMS") as-is
-    if w.len() <= 4 && w.chars().all(|c| c.is_ascii_uppercase() || c.is_ascii_digit()) {
+    if w.len() <= 4
+        && w.chars()
+            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit())
+    {
         return w.to_string();
     }
     let mut chars = w.chars();
@@ -135,7 +139,9 @@ mod tests {
     #[test]
     fn test_folder_to_project_name_basic() {
         assert_eq!(
-            folder_to_project_name("/fallout/liberty-prime-from-fallout-4-action-figure-model_files"),
+            folder_to_project_name(
+                "/fallout/liberty-prime-from-fallout-4-action-figure-model_files"
+            ),
             "Liberty Prime From Fallout 4 Action Figure Model"
         );
     }
@@ -143,7 +149,9 @@ mod tests {
     #[test]
     fn test_strips_thingiverse_id() {
         assert_eq!(
-            folder_to_project_name("/gaslands/Mad Max Highway 9 Main Force Patrol Sign - Gaslands _ Darkfuture - 4766824"),
+            folder_to_project_name(
+                "/gaslands/Mad Max Highway 9 Main Force Patrol Sign - Gaslands _ Darkfuture - 4766824"
+            ),
             "Mad Max Highway 9 Main Force Patrol Sign Gaslands Darkfuture"
         );
     }
@@ -179,12 +187,25 @@ mod tests {
         crate::db::migrate(&conn).unwrap();
 
         let base = crate::db::ModelRow {
-            id: 0, path: String::new(), filename: String::new(),
-            folder: String::new(), format: "STL".to_string(), file_size: 100,
-            title: None, designer: None, description: None, application: None,
-            license: None, created_at: None, object_count: None,
-            triangle_count: None, dim_x: None, dim_y: None, dim_z: None,
-            thumbnail_path: None, project_id: None,
+            id: 0,
+            path: String::new(),
+            filename: String::new(),
+            folder: String::new(),
+            format: "STL".to_string(),
+            file_size: 100,
+            title: None,
+            designer: None,
+            description: None,
+            application: None,
+            license: None,
+            created_at: None,
+            object_count: None,
+            triangle_count: None,
+            dim_x: None,
+            dim_y: None,
+            dim_z: None,
+            thumbnail_path: None,
+            project_id: None,
         };
 
         // Three files in a deep project folder
@@ -193,24 +214,43 @@ mod tests {
             ("/tmp/p2.stl", "/fallout/liberty-prime_files"),
             ("/tmp/p3.stl", "/fallout/liberty-prime_files"),
         ] {
-            crate::db::upsert(&conn, &crate::db::ModelRow {
-                path: path.into(), filename: path.into(), folder: folder.into(), ..base.clone()
-            }).unwrap();
+            crate::db::upsert(
+                &conn,
+                &crate::db::ModelRow {
+                    path: path.into(),
+                    filename: path.into(),
+                    folder: folder.into(),
+                    ..base.clone()
+                },
+            )
+            .unwrap();
         }
         // One file in a shallow category folder — should NOT be grouped
-        crate::db::upsert(&conn, &crate::db::ModelRow {
-            path: "/tmp/solo.stl".into(), filename: "solo.stl".into(),
-            folder: "/fallout".into(), ..base.clone()
-        }).unwrap();
+        crate::db::upsert(
+            &conn,
+            &crate::db::ModelRow {
+                path: "/tmp/solo.stl".into(),
+                filename: "solo.stl".into(),
+                folder: "/fallout".into(),
+                ..base.clone()
+            },
+        )
+        .unwrap();
 
         let stats = run(&conn).unwrap();
 
-        assert_eq!(stats.projects_created, 1, "should create exactly one project");
+        assert_eq!(
+            stats.projects_created, 1,
+            "should create exactly one project"
+        );
         assert_eq!(stats.models_assigned, 3, "should assign three models");
 
         // Solo file should remain unassigned
         let solo = crate::db::get_by_id(&conn, 4).unwrap().unwrap();
-        assert!(solo.project_id.is_none(), "shallow folder file should stay unassigned");
+        assert!(
+            solo.project_id.is_none(),
+            "shallow folder file should stay unassigned"
+        );
     }
 
     #[test]
@@ -220,16 +260,45 @@ mod tests {
         crate::db::migrate(&conn).unwrap();
 
         let base = crate::db::ModelRow {
-            id: 0, path: String::new(), filename: String::new(),
-            folder: "/toys/dragon_set".into(), format: "STL".to_string(), file_size: 100,
-            title: None, designer: None, description: None, application: None,
-            license: None, created_at: None, object_count: None,
-            triangle_count: None, dim_x: None, dim_y: None, dim_z: None,
-            thumbnail_path: None, project_id: None,
+            id: 0,
+            path: String::new(),
+            filename: String::new(),
+            folder: "/toys/dragon_set".into(),
+            format: "STL".to_string(),
+            file_size: 100,
+            title: None,
+            designer: None,
+            description: None,
+            application: None,
+            license: None,
+            created_at: None,
+            object_count: None,
+            triangle_count: None,
+            dim_x: None,
+            dim_y: None,
+            dim_z: None,
+            thumbnail_path: None,
+            project_id: None,
         };
 
-        crate::db::upsert(&conn, &crate::db::ModelRow { path: "/tmp/a.stl".into(), filename: "a.stl".into(), ..base.clone() }).unwrap();
-        crate::db::upsert(&conn, &crate::db::ModelRow { path: "/tmp/b.stl".into(), filename: "b.stl".into(), ..base.clone() }).unwrap();
+        crate::db::upsert(
+            &conn,
+            &crate::db::ModelRow {
+                path: "/tmp/a.stl".into(),
+                filename: "a.stl".into(),
+                ..base.clone()
+            },
+        )
+        .unwrap();
+        crate::db::upsert(
+            &conn,
+            &crate::db::ModelRow {
+                path: "/tmp/b.stl".into(),
+                filename: "b.stl".into(),
+                ..base.clone()
+            },
+        )
+        .unwrap();
 
         // Manually assign model 1 to a different project
         let manual_pid = crate::db::find_or_create_project(&conn, "My Custom Project").unwrap();
@@ -239,7 +308,10 @@ mod tests {
 
         // Only model 2 should be auto-grouped (model 1 is already assigned)
         // But since only 1 unassigned model remains in the folder, no auto-group
-        assert_eq!(stats.models_assigned, 0, "should not auto-group with only 1 unassigned file");
+        assert_eq!(
+            stats.models_assigned, 0,
+            "should not auto-group with only 1 unassigned file"
+        );
 
         // Model 1 should keep its manual project
         let m1 = crate::db::get_by_id(&conn, 1).unwrap().unwrap();
