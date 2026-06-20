@@ -2,7 +2,7 @@ use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct Settings {
     pub base_folder: String,
     pub port: u16,
@@ -10,19 +10,6 @@ pub struct Settings {
     pub thumb_dir: String,
     pub preferred_slicer: Option<String>,
     pub rescan_on_startup: bool,
-}
-
-impl Default for Settings {
-    fn default() -> Self {
-        Settings {
-            base_folder: String::new(),
-            port: 0,
-            db_path: String::new(),
-            thumb_dir: String::new(),
-            preferred_slicer: None,
-            rescan_on_startup: false,
-        }
-    }
 }
 
 impl Settings {

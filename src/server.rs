@@ -569,14 +569,14 @@ async fn extract_handler(State(state): State<SharedState>) -> impl IntoResponse 
             crate::extract::extract_all(std::path::Path::new(&files_root)).unwrap_or_default();
         let zips: usize = results.iter().filter(|r| !r.skipped).count();
         let files: usize = results.iter().map(|r| r.files_extracted).sum();
-        if zips > 0 {
-            if let Ok(conn) = crate::db::open(&db_path) {
-                let _ = crate::scanner::scan(
-                    &conn,
-                    std::path::Path::new(&files_root),
-                    std::path::Path::new(&thumb_dir),
-                );
-            }
+        if zips > 0
+            && let Ok(conn) = crate::db::open(&db_path)
+        {
+            let _ = crate::scanner::scan(
+                &conn,
+                std::path::Path::new(&files_root),
+                std::path::Path::new(&thumb_dir),
+            );
         }
         scanning.store(false, Ordering::Relaxed);
         (zips, files)

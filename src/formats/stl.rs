@@ -115,8 +115,8 @@ fn extract_ascii(data: &[u8]) -> Result<StlMeta> {
             }
         } else if line.starts_with("facet normal") {
             triangles += 1;
-        } else if line.starts_with("vertex ") {
-            let coords: Vec<f64> = line[7..]
+        } else if let Some(rest) = line.strip_prefix("vertex ") {
+            let coords: Vec<f64> = rest
                 .split_whitespace()
                 .filter_map(|s| s.parse().ok())
                 .collect();

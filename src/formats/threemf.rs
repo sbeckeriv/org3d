@@ -196,15 +196,15 @@ pub fn to_binary_stl(path: &Path) -> Result<Vec<u8>> {
     let mut build_transforms: std::collections::HashMap<String, Transform> =
         std::collections::HashMap::new();
     for node in main_doc.descendants() {
-        if node.tag_name().name() == "item" {
-            if let Some(oid) = node.attribute("objectid") {
-                let xform = node
-                    .attributes()
-                    .find(|a| a.name() == "transform")
-                    .and_then(|a| Transform::from_attr(a.value()))
-                    .unwrap_or_else(Transform::identity);
-                build_transforms.insert(oid.to_string(), xform);
-            }
+        if node.tag_name().name() == "item"
+            && let Some(oid) = node.attribute("objectid")
+        {
+            let xform = node
+                .attributes()
+                .find(|a| a.name() == "transform")
+                .and_then(|a| Transform::from_attr(a.value()))
+                .unwrap_or_else(Transform::identity);
+            build_transforms.insert(oid.to_string(), xform);
         }
     }
 
@@ -256,35 +256,34 @@ pub fn to_binary_stl(path: &Path) -> Result<Vec<u8>> {
 
                 let want_id: Option<&str> = comp.attribute("objectid");
 
-                if let Some(ep) = ext_path {
-                    if let Some(ext_xml) = xml_by_path.get(&ep) {
-                        if let Ok(ext_doc) = roxmltree::Document::parse(ext_xml) {
-                            for ext_obj in ext_doc
-                                .descendants()
-                                .filter(|n| n.tag_name().name() == "object")
-                            {
-                                if let Some(wid) = want_id {
-                                    if ext_obj.attribute("id") != Some(wid) {
-                                        continue;
-                                    }
-                                }
-                                let ot = ext_obj.attribute("type").unwrap_or("model");
-                                if ot != "model" {
-                                    continue;
-                                }
+                if let Some(ep) = ext_path
+                    && let Some(ext_xml) = xml_by_path.get(&ep)
+                    && let Ok(ext_doc) = roxmltree::Document::parse(ext_xml)
+                {
+                    for ext_obj in ext_doc
+                        .descendants()
+                        .filter(|n| n.tag_name().name() == "object")
+                    {
+                        if let Some(wid) = want_id
+                            && ext_obj.attribute("id") != Some(wid)
+                        {
+                            continue;
+                        }
+                        let ot = ext_obj.attribute("type").unwrap_or("model");
+                        if ot != "model" {
+                            continue;
+                        }
 
-                                if let Some(mesh) =
-                                    ext_obj.children().find(|n| n.tag_name().name() == "mesh")
-                                {
-                                    add_mesh(
-                                        mesh,
-                                        &build_xform,
-                                        &comp_xform,
-                                        &mut all_verts,
-                                        &mut all_tris,
-                                    );
-                                }
-                            }
+                        if let Some(mesh) =
+                            ext_obj.children().find(|n| n.tag_name().name() == "mesh")
+                        {
+                            add_mesh(
+                                mesh,
+                                &build_xform,
+                                &comp_xform,
+                                &mut all_verts,
+                                &mut all_tris,
+                            );
                         }
                     }
                 }
@@ -389,12 +388,12 @@ fn extract_thumbnail(archive: &mut zip::ZipArchive<std::fs::File>) -> Option<Vec
     ];
 
     for candidate in &preferred {
-        if let Some(name) = names.iter().find(|n| n.eq_ignore_ascii_case(candidate)) {
-            if let Ok(mut entry) = archive.by_name(name) {
-                let mut buf = Vec::new();
-                if entry.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
-                    return Some(buf);
-                }
+        if let Some(name) = names.iter().find(|n| n.eq_ignore_ascii_case(candidate))
+            && let Ok(mut entry) = archive.by_name(name)
+        {
+            let mut buf = Vec::new();
+            if entry.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+                return Some(buf);
             }
         }
     }
@@ -402,13 +401,13 @@ fn extract_thumbnail(archive: &mut zip::ZipArchive<std::fs::File>) -> Option<Vec
     // Last resort: any png under Metadata/ or Auxiliaries/
     for name in &names {
         let lower = name.to_lowercase();
-        if lower.ends_with(".png") && (lower.contains("metadata") || lower.contains("auxiliaries"))
+        if lower.ends_with(".png")
+            && (lower.contains("metadata") || lower.contains("auxiliaries"))
+            && let Ok(mut entry) = archive.by_name(name)
         {
-            if let Ok(mut entry) = archive.by_name(name) {
-                let mut buf = Vec::new();
-                if entry.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
-                    return Some(buf);
-                }
+            let mut buf = Vec::new();
+            if entry.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
+                return Some(buf);
             }
         }
     }

@@ -64,7 +64,11 @@ pub fn run(conn: &Connection) -> Result<AutogroupStats> {
 /// `Liberty Prime From Fallout 4 Action Figure Model`
 pub fn folder_to_project_name(folder: &str) -> String {
     // Take the deepest path segment
-    let segment = folder.trim_matches('/').split('/').last().unwrap_or(folder);
+    let segment = folder
+        .trim_matches('/')
+        .split('/')
+        .next_back()
+        .unwrap_or(folder);
 
     // Strip Thingiverse-style numeric suffixes: " - 4766824" or "_4766824"
     let segment = strip_id_suffix(segment);

@@ -41,6 +41,7 @@ where
         db_path: db_path.to_str().unwrap().to_string(),
         thumb_dir: std::env::temp_dir().to_str().unwrap().to_string(),
         files_root: std::env::temp_dir().to_str().unwrap().to_string(),
+        data_dir: std::env::temp_dir().to_str().unwrap().to_string(),
         port: 0,
     };
 
