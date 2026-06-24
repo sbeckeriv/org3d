@@ -44,6 +44,7 @@ impl Application {
             preferred_slicer: std::sync::RwLock::new(preferred_slicer),
             data_dir: cfg.data_dir,
             scanning: Arc::new(AtomicBool::new(false)),
+            update_banner: Arc::new(Mutex::new(None)),
         });
         // Port 0 lets the OS assign a free port. If a specific port is configured
         // but already taken, fall back to OS-assigned rather than crashing.
@@ -67,6 +68,10 @@ impl Application {
         self.port
     }
 
+    pub fn update_banner(&self) -> Arc<Mutex<Option<String>>> {
+        self.state.update_banner.clone()
+    }
+
     pub async fn run(self) -> Result<()> {
         tracing::info!("listening on http://localhost:{}", self.port);
         axum::serve(self.listener, make_router(self.state)).await?;
@@ -85,6 +90,7 @@ pub struct AppState {
     pub preferred_slicer: std::sync::RwLock<Option<String>>,
     pub data_dir: String,
     pub scanning: Arc<AtomicBool>,
+    pub update_banner: Arc<Mutex<Option<String>>>,
 }
 
 pub type SharedState = Arc<AppState>;
@@ -129,6 +135,7 @@ pub fn make_router(state: SharedState) -> Router {
         .route("/projects", get(projects_page))
         .route("/settings", get(settings_page).post(save_settings))
         .route("/api/scan/status", get(scan_status))
+        .route("/api/update/status", get(update_status_handler))
         .route("/search", get(search_results))
         .route("/model/{id}", get(model_detail))
         .route("/file/{id}", get(serve_model_file))
@@ -615,6 +622,18 @@ async fn scan_status(State(state): State<SharedState>) -> impl IntoResponse {
             r#"<span id="scan-status" class="count">{} models</span>"#,
             count
         ))
+    }
+}
+
+async fn update_status_handler(State(state): State<SharedState>) -> impl IntoResponse {
+    let banner = state.update_banner.lock().ok().and_then(|b| b.clone());
+    match banner {
+        Some(msg) => Html(format!(
+            r#"<div id="update-banner" class="update-banner" hx-get="/api/update/status" hx-trigger="every 2s" hx-swap="outerHTML">{msg}</div>"#
+        )),
+        None => Html(
+            r#"<div id="update-banner" hx-get="/api/update/status" hx-trigger="every 15s" hx-swap="outerHTML"></div>"#.to_string(),
+        ),
     }
 }
 

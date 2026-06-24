@@ -59,9 +59,13 @@ header a:hover { color: var(--text); }
 #detail-content { font-size: .9rem; line-height: 1.6; }
 #detail-content p { margin: .3rem 0; }
 #detail-content strong { color: var(--muted); font-weight: 500; }
+
+.update-banner { background: var(--accent); color: #fff; padding: .4rem 1.5rem; font-size: .85rem; text-align: center; }
+.update-banner a { color: #fff; }
 </style>
 </head>
 <body>
+<div id="update-banner" hx-get="/api/update/status" hx-trigger="load" hx-swap="outerHTML"></div>
 <header>
   <h1>ORG3D</h1>
   <a href="/projects">Projects</a>
