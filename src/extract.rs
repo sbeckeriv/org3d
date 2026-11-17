@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -7,6 +8,14 @@ pub struct ExtractResult {
     pub dest_dir: PathBuf,
     pub files_extracted: usize,
     pub skipped: bool, // dest already existed before extraction
+    /// Why extraction failed (nothing was written).
+    pub error: Option<String>,
+}
+
+impl ExtractResult {
+    pub fn extracted(&self) -> bool {
+        !self.skipped && self.error.is_none()
+    }
 }
 
 /// Find and extract all ZIP archives under `root`.
@@ -41,6 +50,7 @@ pub fn extract_all(root: &Path) -> Result<Vec<ExtractResult>> {
                 dest_dir: dest,
                 files_extracted: 0,
                 skipped: true,
+                error: None,
             });
             continue;
         }
@@ -67,15 +77,28 @@ pub fn extract_all(root: &Path) -> Result<Vec<ExtractResult>> {
                 dest_dir: dest,
                 files_extracted: count,
                 skipped: false,
+                error: None,
             }),
             Err(e) => {
-                tracing::warn!("failed to extract {}: {e}", zip_path.display());
+                tracing::warn!("failed to extract {}: {e:#}", zip_path.display());
+                results.push(ExtractResult {
+                    zip_path,
+                    dest_dir: dest,
+                    files_extracted: 0,
+                    skipped: false,
+                    // Root cause only: the caller already knows which ZIP.
+                    error: Some(e.root_cause().to_string()),
+                });
             }
         }
     }
 
     Ok(results)
 }
+
+/// Refuse archives that would expand beyond this on disk.
+const MAX_ARCHIVE_BYTES: u64 = 32 << 30;
+const MAX_ENTRIES: usize = 100_000;
 
 fn extract_one(zip_path: &Path, dest: &Path) -> Result<usize> {
     std::fs::create_dir_all(dest).with_context(|| format!("creating {}", dest.display()))?;
@@ -84,7 +107,11 @@ fn extract_one(zip_path: &Path, dest: &Path) -> Result<usize> {
     let mut archive = zip::ZipArchive::new(file)
         .with_context(|| format!("opening zip {}", zip_path.display()))?;
 
+    if archive.len() > MAX_ENTRIES {
+        anyhow::bail!("zip has {} entries (limit {MAX_ENTRIES})", archive.len());
+    }
     let mut count = 0;
+    let mut total: u64 = 0;
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
@@ -108,9 +135,22 @@ fn extract_one(zip_path: &Path, dest: &Path) -> Result<usize> {
             if let Some(parent) = out_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
+            crate::formats::TO_DISK.check(&entry)?;
             let mut out = std::fs::File::create(&out_path)
                 .with_context(|| format!("creating {}", out_path.display()))?;
-            std::io::copy(&mut entry, &mut out)?;
+            // Enforce the limits on actual bytes, not the (forgeable) header.
+            let limit = crate::formats::TO_DISK.max_entry;
+            let n = std::io::copy(&mut (&mut entry).take(limit + 1), &mut out)?;
+            if n > limit {
+                anyhow::bail!("{raw_name} exceeds {} MiB", limit >> 20);
+            }
+            total += n;
+            if total > MAX_ARCHIVE_BYTES {
+                anyhow::bail!(
+                    "archive expands to more than {} GiB",
+                    MAX_ARCHIVE_BYTES >> 30
+                );
+            }
             count += 1;
         }
     }
@@ -207,7 +247,9 @@ mod tests {
             .map(|e| e.unwrap().file_name())
             .collect();
         std::fs::remove_dir_all(&root).ok();
-        assert!(results.is_empty());
+        assert_eq!(results.len(), 1);
+        assert!(results[0].error.is_some(), "failure should be reported");
+        assert!(!results[0].extracted());
         assert_eq!(leftovers, vec![std::ffi::OsString::from("broken.zip")]);
     }
 

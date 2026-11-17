@@ -1,0 +1,14 @@
+{% if scanning %}
+<span id="scan-status" class="count" hx-get="/api/scan/status" hx-trigger="every 1s" hx-swap="outerHTML">
+  <span class="spinner"></span>
+  {% if progress.total %}Scanning {{ progress.done }} / {{ progress.total }}{% else %}Scanning — reading folders…{% endif %}
+  · {{ count }} models
+</span>
+{% else %}
+<span id="scan-status" class="count">
+  {{ count }} models
+  {% if last and last.problems %}
+  · <a href="/settings#last-scan" style="color:#d9a35b;text-decoration:none" title="{{ last.kind }} at {{ last.started }}">⚠ last scan had problems</a>
+  {% endif %}
+</span>
+{% endif %}

@@ -1,4 +1,6 @@
 use anyhow::Result;
+use std::fs::File;
+use std::io::{BufRead, BufReader, Read};
 use std::path::Path;
 
 pub struct StlMeta {
@@ -12,142 +14,167 @@ pub struct StlMeta {
     pub header: Option<String>,
 }
 
+/// Parse STL metadata by streaming the file, so memory use stays constant
+/// no matter how large the mesh is.
 pub fn extract(path: &Path) -> Result<StlMeta> {
-    let data = std::fs::read(path)?;
-    if is_binary(&data) {
-        extract_binary(&data)
+    let file = File::open(path)?;
+    let len = file.metadata()?.len();
+    let mut r = BufReader::with_capacity(1 << 20, file);
+    let mut head = [0u8; 84];
+    let n = read_up_to(&mut r, &mut head)?;
+    let head = &head[..n];
+    if is_binary(head, len) {
+        extract_binary(head, r)
     } else {
-        extract_ascii(&data)
+        extract_ascii(BufReader::new(head.chain(r)))
     }
 }
 
-fn is_binary(data: &[u8]) -> bool {
-    if data.len() < 84 {
+/// Fill `buf` as far as the input allows (short files are fine).
+fn read_up_to(r: &mut impl Read, buf: &mut [u8]) -> Result<usize> {
+    let mut n = 0;
+    while n < buf.len() {
+        match r.read(&mut buf[n..])? {
+            0 => break,
+            k => n += k,
+        }
+    }
+    Ok(n)
+}
+
+fn is_binary(head: &[u8], file_len: u64) -> bool {
+    if head.len() < 84 {
         return false;
     }
     // If first 5 bytes are "solid", it *might* be ASCII — but some binary files do this too.
     // Cross-check with the declared triangle count vs file size.
-    let claimed = u32::from_le_bytes(data[80..84].try_into().unwrap()) as u64;
+    let claimed = u32::from_le_bytes(head[80..84].try_into().expect("4 bytes")) as u64;
     let expected = 84 + claimed * 50;
-    if data.len() as u64 == expected && claimed > 0 {
+    if file_len == expected && claimed > 0 {
         return true;
     }
-    !data.starts_with(b"solid")
+    !head.starts_with(b"solid")
 }
 
-fn extract_binary(data: &[u8]) -> Result<StlMeta> {
-    if data.len() < 84 {
-        anyhow::bail!("binary STL too short");
-    }
+struct Bounds {
+    min: [f64; 3],
+    max: [f64; 3],
+}
 
-    let header_bytes = &data[..80];
-    let header_str = std::str::from_utf8(header_bytes)
+impl Bounds {
+    fn new() -> Self {
+        Self {
+            min: [f64::MAX; 3],
+            max: [f64::MIN; 3],
+        }
+    }
+    fn add(&mut self, p: [f64; 3]) {
+        for (i, v) in p.into_iter().enumerate() {
+            self.min[i] = self.min[i].min(v);
+            self.max[i] = self.max[i].max(v);
+        }
+    }
+    fn dims(&self, triangles: u64) -> [Option<f64>; 3] {
+        if triangles == 0 {
+            return [None; 3];
+        }
+        [0, 1, 2].map(|i| Some(self.max[i] - self.min[i]))
+    }
+}
+
+fn extract_binary(head: &[u8], mut r: impl Read) -> Result<StlMeta> {
+    let header_str = std::str::from_utf8(&head[..80])
         .unwrap_or("")
         .trim_end_matches('\0')
         .trim()
         .to_string();
-    let header = if header_str.is_empty() {
-        None
-    } else {
-        Some(header_str)
-    };
+    let header = (!header_str.is_empty()).then_some(header_str);
+    let triangle_count = u32::from_le_bytes(head[80..84].try_into().expect("4 bytes")) as u64;
 
-    let triangle_count = u32::from_le_bytes(data[80..84].try_into().unwrap()) as u64;
-
-    let mut min = [f64::MAX; 3];
-    let mut max = [f64::MIN; 3];
-
-    for i in 0..triangle_count as usize {
-        let base = 84 + i * 50;
-        if base + 50 > data.len() {
+    let mut b = Bounds::new();
+    let mut tri = [0u8; 50];
+    for _ in 0..triangle_count {
+        // A truncated file ends the loop, same as before streaming.
+        if read_up_to(&mut r, &mut tri)? < 50 {
             break;
         }
         // 12 bytes normal, then 3 vertices × 12 bytes
         for v in 0..3usize {
-            let off = base + 12 + v * 12;
-            let x = f32::from_le_bytes(data[off..off + 4].try_into().unwrap()) as f64;
-            let y = f32::from_le_bytes(data[off + 4..off + 8].try_into().unwrap()) as f64;
-            let z = f32::from_le_bytes(data[off + 8..off + 12].try_into().unwrap()) as f64;
-            min[0] = min[0].min(x);
-            min[1] = min[1].min(y);
-            min[2] = min[2].min(z);
-            max[0] = max[0].max(x);
-            max[1] = max[1].max(y);
-            max[2] = max[2].max(z);
+            let off = 12 + v * 12;
+            let f =
+                |o: usize| f32::from_le_bytes(tri[o..o + 4].try_into().expect("4 bytes")) as f64;
+            b.add([f(off), f(off + 4), f(off + 8)]);
         }
     }
 
+    let [dim_x, dim_y, dim_z] = b.dims(triangle_count);
     Ok(StlMeta {
         triangle_count,
-        dim_x: if triangle_count > 0 {
-            Some(max[0] - min[0])
-        } else {
-            None
-        },
-        dim_y: if triangle_count > 0 {
-            Some(max[1] - min[1])
-        } else {
-            None
-        },
-        dim_z: if triangle_count > 0 {
-            Some(max[2] - min[2])
-        } else {
-            None
-        },
+        dim_x,
+        dim_y,
+        dim_z,
         name: None,
         header,
     })
 }
 
-fn extract_ascii(data: &[u8]) -> Result<StlMeta> {
-    let text = std::str::from_utf8(data).unwrap_or("");
-    let mut triangles: u64 = 0;
-    let mut min = [f64::MAX; 3];
-    let mut max = [f64::MIN; 3];
-    let mut name: Option<String> = None;
+/// Longest ASCII line we bother parsing; longer lines (e.g. a binary file
+/// without a newline) are skipped without buffering them.
+const MAX_LINE: u64 = 4096;
 
-    for (i, line) in text.lines().enumerate() {
-        let line = line.trim();
-        if i == 0 && line.starts_with("solid") {
-            let n = line[5..].trim().to_string();
+fn extract_ascii(mut r: impl BufRead) -> Result<StlMeta> {
+    let mut triangles: u64 = 0;
+    let mut b = Bounds::new();
+    let mut name: Option<String> = None;
+    let mut buf = Vec::with_capacity(256);
+    let mut first = true;
+
+    loop {
+        buf.clear();
+        let n = (&mut r).take(MAX_LINE).read_until(b'\n', &mut buf)?;
+        if n == 0 {
+            break;
+        }
+        if n as u64 == MAX_LINE && buf.last() != Some(&b'\n') {
+            // Discard the rest of an over-long line.
+            let mut sink = Vec::new();
+            loop {
+                sink.clear();
+                let k = (&mut r).take(MAX_LINE).read_until(b'\n', &mut sink)?;
+                if k == 0 || sink.last() == Some(&b'\n') {
+                    break;
+                }
+            }
+            first = false;
+            continue;
+        }
+        let text = String::from_utf8_lossy(&buf);
+        let line = text.trim();
+        if first && let Some(rest) = line.strip_prefix("solid") {
+            let n = rest.trim();
             if !n.is_empty() {
-                name = Some(n);
+                name = Some(n.to_string());
             }
         } else if line.starts_with("facet normal") {
             triangles += 1;
         } else if let Some(rest) = line.strip_prefix("vertex ") {
-            let coords: Vec<f64> = rest
+            let c: Vec<f64> = rest
                 .split_whitespace()
                 .filter_map(|s| s.parse().ok())
                 .collect();
-            if coords.len() == 3 {
-                min[0] = min[0].min(coords[0]);
-                min[1] = min[1].min(coords[1]);
-                min[2] = min[2].min(coords[2]);
-                max[0] = max[0].max(coords[0]);
-                max[1] = max[1].max(coords[1]);
-                max[2] = max[2].max(coords[2]);
+            if c.len() == 3 {
+                b.add([c[0], c[1], c[2]]);
             }
         }
+        first = false;
     }
 
+    let [dim_x, dim_y, dim_z] = b.dims(triangles);
     Ok(StlMeta {
         triangle_count: triangles,
-        dim_x: if triangles > 0 {
-            Some(max[0] - min[0])
-        } else {
-            None
-        },
-        dim_y: if triangles > 0 {
-            Some(max[1] - min[1])
-        } else {
-            None
-        },
-        dim_z: if triangles > 0 {
-            Some(max[2] - min[2])
-        } else {
-            None
-        },
+        dim_x,
+        dim_y,
+        dim_z,
         name,
         header: None,
     })
@@ -259,6 +286,34 @@ mod tests {
 
         assert_eq!(meta.triangle_count, 1);
         assert!(meta.name.is_none(), "empty solid name should not be stored");
+    }
+
+    #[test]
+    fn test_ascii_skips_overlong_lines() {
+        let mut stl = b"solid big\n".to_vec();
+        stl.extend(std::iter::repeat_n(b'x', 20_000));
+        stl.extend_from_slice(
+            b"\nfacet normal 0 0 1\n outer loop\n vertex 0 0 0\n vertex 3 0 0\n vertex 0 4 0\n endloop\nendfacet\nendsolid\n",
+        );
+        let path = tmp_path("long.stl");
+        std::fs::write(&path, &stl).unwrap();
+        let meta = extract(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(meta.triangle_count, 1);
+        assert_eq!(meta.name.as_deref(), Some("big"));
+        assert!((meta.dim_x.unwrap() - 3.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_truncated_binary_does_not_error() {
+        let mut data = vec![0u8; 80];
+        data.extend_from_slice(&5u32.to_le_bytes()); // claims 5 triangles
+        data.extend_from_slice(&[0u8; 60]); // only 1.2 present
+        let path = tmp_path("trunc.stl");
+        std::fs::write(&path, &data).unwrap();
+        let meta = extract(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(meta.triangle_count, 5);
     }
 
     #[test]

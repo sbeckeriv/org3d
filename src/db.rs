@@ -532,6 +532,7 @@ pub fn purge_missing(conn: &Connection, days: u32) -> Result<Vec<Option<String>>
 
 /// Lightweight lookup for file-serving handlers: just enough to locate the
 /// file and build a cache key, so the DB lock is held as briefly as possible.
+#[derive(Clone)]
 pub struct FileRef {
     pub path: String,
     pub filename: String,

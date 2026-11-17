@@ -1,5 +1,4 @@
 use anyhow::{Context, Result};
-use std::io::Read;
 use std::path::Path;
 
 pub struct ThreeMfMeta {
@@ -167,16 +166,24 @@ pub fn to_binary_stl(path: &Path) -> Result<Vec<u8>> {
     let mut xml_by_path: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
 
+    let mut total: u64 = 0;
     for name in &all_names {
         if !name.to_lowercase().ends_with(".model") {
             continue;
         }
         let key = name.trim_start_matches('/').to_lowercase();
         if let Ok(mut entry) = archive.by_name(name) {
-            let mut buf = String::new();
-            if entry.read_to_string(&mut buf).is_ok() {
-                xml_by_path.insert(key, buf);
+            // Oversized/bomb entries are an error, not silently skipped:
+            // a preview missing parts would be misleading.
+            let buf = super::IN_MEMORY.read_string(&mut entry)?;
+            total += buf.len() as u64;
+            if total > MAX_TOTAL_MODEL_XML {
+                anyhow::bail!(
+                    "3mf model data exceeds {} MiB in total",
+                    MAX_TOTAL_MODEL_XML >> 20
+                );
             }
+            xml_by_path.insert(key, buf);
         }
     }
 
@@ -377,10 +384,18 @@ fn read_model_xml(archive: &mut zip::ZipArchive<std::fs::File>) -> Result<String
         .context("no .model file found in 3mf")?;
 
     let mut entry = archive.by_name(&model_path)?;
-    let mut buf = String::new();
-    entry.read_to_string(&mut buf)?;
-    Ok(buf)
+    super::IN_MEMORY.read_string(&mut entry)
 }
+
+/// Cap on all `.model` parts of one 3MF held in memory at once.
+const MAX_TOTAL_MODEL_XML: u64 = 2 << 30;
+
+/// Thumbnails are small PNGs; anything huge is not a thumbnail.
+const THUMBNAIL: super::ZipLimits = super::ZipLimits {
+    max_entry: 32 << 20,
+    max_ratio: 200,
+    ratio_min_size: 1 << 20,
+};
 
 fn extract_thumbnail(archive: &mut zip::ZipArchive<std::fs::File>) -> Option<Vec<u8>> {
     let names: Vec<String> = archive
@@ -399,11 +414,10 @@ fn extract_thumbnail(archive: &mut zip::ZipArchive<std::fs::File>) -> Option<Vec
     for candidate in &preferred {
         if let Some(name) = names.iter().find(|n| n.eq_ignore_ascii_case(candidate))
             && let Ok(mut entry) = archive.by_name(name)
+            && let Ok(buf) = THUMBNAIL.read(&mut entry)
+            && !buf.is_empty()
         {
-            let mut buf = Vec::new();
-            if entry.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
-                return Some(buf);
-            }
+            return Some(buf);
         }
     }
 
@@ -413,11 +427,10 @@ fn extract_thumbnail(archive: &mut zip::ZipArchive<std::fs::File>) -> Option<Vec
         if lower.ends_with(".png")
             && (lower.contains("metadata") || lower.contains("auxiliaries"))
             && let Ok(mut entry) = archive.by_name(name)
+            && let Ok(buf) = THUMBNAIL.read(&mut entry)
+            && !buf.is_empty()
         {
-            let mut buf = Vec::new();
-            if entry.read_to_end(&mut buf).is_ok() && !buf.is_empty() {
-                return Some(buf);
-            }
+            return Some(buf);
         }
     }
 

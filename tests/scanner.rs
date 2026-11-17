@@ -154,7 +154,13 @@ fn mass_disappearance_is_refused_unless_allowed() {
     for i in 0..30 {
         std::fs::remove_file(l.root.join(format!("d{i}.stl"))).unwrap();
     }
-    assert_eq!(l.scan().missing, 0, "guard should refuse");
+    let s = l.scan();
+    assert_eq!(s.missing, 0, "guard should refuse");
+    assert!(
+        s.warnings.iter().any(|w| w.contains("vanished at once")),
+        "refusal must be reported, not just logged: {:?}",
+        s.warnings
+    );
     assert_eq!(db::count(&l.conn).unwrap(), 40);
 
     let s = l.scan_opts(scanner::ScanOptions {
@@ -171,7 +177,9 @@ fn empty_library_folder_hides_nothing() {
     write_stl(&l.root.join("a.stl"), 1);
     l.scan();
     std::fs::remove_file(l.root.join("a.stl")).unwrap();
-    assert_eq!(l.scan().missing, 0);
+    let s = l.scan();
+    assert_eq!(s.missing, 0);
+    assert!(s.warnings.iter().any(|w| w.contains("mounted")));
     assert_eq!(db::count(&l.conn).unwrap(), 1);
 }
 

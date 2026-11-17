@@ -51,6 +51,16 @@ struct ServeOpts {
     /// (losing its project assignment). 0 = never purge.
     #[arg(long, env = "ORG3D_PURGE_MISSING_DAYS", default_value_t = 30)]
     purge_missing_days: u32,
+
+    /// Require a login, as `user:password` (password ≥ 8 chars).
+    /// Strongly recommended when the port is reachable from your LAN.
+    #[arg(
+        long,
+        env = "ORG3D_AUTH",
+        hide_env_values = true,
+        value_parser = org3d::auth::Credentials::parse
+    )]
+    auth: Option<org3d::auth::Credentials>,
 }
 
 #[derive(Subcommand)]
@@ -120,6 +130,7 @@ fn app_config(cli_db: &str, cli_thumbs: &str, o: &ServeOpts) -> server::AppConfi
         rescan_at: o.rescan_at,
         preview_cache_bytes: o.preview_cache_mb.saturating_mul(1024 * 1024),
         purge_missing_days: o.purge_missing_days,
+        auth: o.auth.clone(),
     }
 }
 
@@ -163,8 +174,15 @@ async fn main() -> Result<()> {
             let opts = scanner::ScanOptions {
                 purge_missing_after_days: purge_missing_days,
                 allow_mass_missing,
+                ..Default::default()
             };
-            scanner::scan_with(&conn, &path, &thumb_dir, &opts)?;
+            let stats = scanner::scan_with(&conn, &path, &thumb_dir, &opts)?;
+            for w in &stats.warnings {
+                eprintln!("warning: {w}");
+            }
+            for f in &stats.failed {
+                eprintln!("failed: {f}");
+            }
         }
 
         Cmd::Serve(opts) => {
@@ -232,14 +250,19 @@ async fn main() -> Result<()> {
             let results = extract::extract_all(&path)
                 .with_context(|| format!("extracting in {}", path.display()))?;
             let total: usize = results.iter().map(|r| r.files_extracted).sum();
-            println!("Extracted {} ZIPs, {} files total.", results.len(), total);
+            let done = results.iter().filter(|r| r.extracted()).count();
+            println!("Extracted {done} ZIPs, {total} files total.");
             for r in &results {
-                println!(
-                    "  {} → {} ({} files)",
-                    r.zip_path.display(),
-                    r.dest_dir.display(),
-                    r.files_extracted
-                );
+                match &r.error {
+                    Some(e) => println!("  {} FAILED: {e}", r.zip_path.display()),
+                    None if r.skipped => {}
+                    None => println!(
+                        "  {} → {} ({} files)",
+                        r.zip_path.display(),
+                        r.dest_dir.display(),
+                        r.files_extracted
+                    ),
+                }
             }
             if scan {
                 let conn = db::open(&cli.db)?;

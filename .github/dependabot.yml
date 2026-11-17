@@ -1,0 +1,29 @@
+version: 2
+updates:
+  # Rust crates. Minor/patch bumps are grouped into one weekly PR; majors
+  # (API breaks) arrive as separate PRs. Security fixes are always separate.
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      rust-minor:
+        update-types: [minor, patch]
+    ignore:
+      # Tauri 3 is still alpha; stay on 2.x until it is stable.
+      - dependency-name: "tauri*"
+        update-types: [version-update:semver-major]
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
+
+  # Base images in the Dockerfile (rust builder, distroless runtime).
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly

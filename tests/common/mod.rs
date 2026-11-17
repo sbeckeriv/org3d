@@ -1,4 +1,5 @@
 use org3d::{db, server};
+use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 static TEST_ID: AtomicU64 = AtomicU64::new(0);
@@ -6,7 +7,11 @@ static TEST_ID: AtomicU64 = AtomicU64::new(0);
 pub struct TestApp {
     pub address: String,
     pub client: reqwest::Client,
-    db_path: std::path::PathBuf,
+    /// Empty per-test library folder the app scans.
+    #[allow(dead_code)]
+    pub library: PathBuf,
+    db_path: PathBuf,
+    scratch: Vec<PathBuf>,
 }
 
 impl TestApp {
@@ -22,6 +27,9 @@ impl TestApp {
 impl Drop for TestApp {
     fn drop(&mut self) {
         let _ = std::fs::remove_file(&self.db_path);
+        for d in &self.scratch {
+            let _ = std::fs::remove_dir_all(d);
+        }
     }
 }
 
@@ -30,31 +38,43 @@ pub async fn spawn_app<F>(seed: F) -> TestApp
 where
     F: FnOnce(&rusqlite::Connection),
 {
+    spawn_app_with(|_| {}, seed).await
+}
+
+/// Like `spawn_app`, but lets the test adjust the config (e.g. enable auth).
+pub async fn spawn_app_with<C, F>(configure: C, seed: F) -> TestApp
+where
+    C: FnOnce(&mut server::AppConfig),
+    F: FnOnce(&rusqlite::Connection),
+{
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
-    let db_path = std::env::temp_dir().join(format!("org3d_test_{id}.db"));
+    let tmp = std::env::temp_dir();
+    let tag = format!("{}_{id}", std::process::id());
+    let db_path = tmp.join(format!("org3d_test_{tag}.db"));
+    let library = tmp.join(format!("org3d_test_lib_{tag}"));
+    let thumbs = tmp.join(format!("org3d_test_thumbs_{tag}"));
+    let cache = tmp.join(format!("org3d_test_cache_{tag}"));
+    let _ = std::fs::remove_dir_all(&library);
+    std::fs::create_dir_all(&library).unwrap();
 
     let conn = db::open(db_path.to_str().unwrap()).unwrap();
     seed(&conn);
     drop(conn);
 
-    let tmp = std::env::temp_dir();
-    let cfg = server::AppConfig {
-        db_path: db_path.to_str().unwrap().to_string(),
-        thumb_dir: tmp
-            .join(format!("org3d_test_thumbs_{id}"))
-            .to_string_lossy()
-            .into_owned(),
-        cache_dir: tmp
-            .join(format!("org3d_test_cache_{id}"))
-            .to_string_lossy()
-            .into_owned(),
-        files_root: tmp.to_string_lossy().into_owned(),
-        data_dir: tmp.to_string_lossy().into_owned(),
+    let s = |p: &PathBuf| p.to_string_lossy().into_owned();
+    let mut cfg = server::AppConfig {
+        db_path: s(&db_path),
+        thumb_dir: s(&thumbs),
+        cache_dir: s(&cache),
+        // Never point this at the shared temp dir: a rescan would walk it all.
+        files_root: s(&library),
+        data_dir: s(&tmp),
         bind: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
         port: 0,
         ..Default::default()
     };
 
+    configure(&mut cfg);
     let app = server::Application::build(cfg).await.unwrap();
     let port = app.port();
     tokio::spawn(app.run());
@@ -62,6 +82,8 @@ where
     TestApp {
         address: format!("http://127.0.0.1:{port}"),
         client: reqwest::Client::new(),
+        scratch: vec![library.clone(), thumbs, cache],
+        library,
         db_path,
     }
 }
