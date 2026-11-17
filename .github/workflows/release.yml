@@ -16,7 +16,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
@@ -49,7 +49,7 @@ jobs:
 
       - name: Install Node (required by Tauri CLI)
         if: steps.check.outputs.exists == 'false'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@v7
         with:
           node-version: 20
 
@@ -71,7 +71,7 @@ jobs:
 
       - name: Create GitHub release
         if: steps.check.outputs.exists == 'false'
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@v3
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           name: org3d ${{ steps.version.outputs.tag }}
