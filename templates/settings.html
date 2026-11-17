@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <title>org3d — Settings</title>
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<script src="https://unpkg.com/htmx.org@2.0.3/dist/htmx.min.js"></script>
+<script src="/static/htmx-2.0.3.min.js"></script>
 <style>
 :root {
   --bg: #0f0f13; --surface: #1a1a22; --border: #2a2a38;
@@ -46,6 +46,9 @@ button[type="submit"]:hover { opacity: .85; }
 }
 .section-divider { border: none; border-top: 1px solid var(--border); margin: 1.75rem 0; }
 .htmx-indicator { display: none; }
+table.runtime { width: 100%; border-collapse: collapse; font-size: .85rem; }
+table.runtime th { text-align: left; font-weight: 500; color: var(--muted); padding: .4rem 1rem .4rem 0; white-space: nowrap; vertical-align: top; }
+table.runtime td { padding: .4rem 0; word-break: break-all; }
 .htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline; }
 </style>
 </head>
@@ -69,6 +72,17 @@ button[type="submit"]:hover { opacity: .85; }
   </div>
   {% endif %}
 
+  {% if managed %}
+  <p class="hint" style="margin-bottom:1.25rem">This server is configured with command-line flags / <code>ORG3D_*</code> environment variables (e.g. in your Docker template). Change them there and restart the container.</p>
+  <table class="runtime">
+    <tr><th>Library folder</th><td>{{ runtime.files_root }}</td></tr>
+    <tr><th>Database</th><td>{{ runtime.db_path }}</td></tr>
+    <tr><th>Thumbnails</th><td>{{ runtime.thumb_dir }}</td></tr>
+    <tr><th>Preview cache</th><td>{{ runtime.cache_dir }} ({% if runtime.preview_cache_mb %}up to {{ runtime.preview_cache_mb }} MiB{% else %}disabled{% endif %})</td></tr>
+    <tr><th>Scheduled rescan</th><td>{% if runtime.rescan_at %}daily at {{ runtime.rescan_at }}{% else %}off (manual only){% endif %}</td></tr>
+    <tr><th>Purge missing after</th><td>{% if runtime.purge_missing_days %}{{ runtime.purge_missing_days }} days{% else %}never{% endif %}</td></tr>
+  </table>
+  {% else %}
   <form method="POST" action="/settings">
 
     <div class="field">
@@ -123,6 +137,7 @@ button[type="submit"]:hover { opacity: .85; }
 
     <button type="submit">Save Settings</button>
   </form>
+  {% endif %}
 
   <hr class="section-divider">
 
@@ -142,7 +157,7 @@ button[type="submit"]:hover { opacity: .85; }
       <span id="rescan-spinner" class="htmx-indicator" style="color:var(--muted);font-size:.85rem">Starting…</span>
       <span id="rescan-result" style="font-size:.85rem"></span>
     </div>
-    <p class="hint" style="margin-top:.45rem">Re-index the base folder. Use this after adding new files without restarting the app.</p>
+    <p class="hint" style="margin-top:.45rem">Re-index the base folder. Only new or changed files are read; unchanged files are skipped using directory metadata, so sleeping disks aren't woken to re-read them. Moved files keep their project; deleted files are hidden and kept for a grace period in case a disk was just offline.</p>
   </div>
 
   <div class="field">

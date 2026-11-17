@@ -45,7 +45,23 @@ pub fn extract_all(root: &Path) -> Result<Vec<ExtractResult>> {
             continue;
         }
 
-        match extract_one(&zip_path, &dest) {
+        // Extract into a hidden sibling and rename on success, so a failure
+        // (corrupt ZIP, disk full, read-only mount) can't leave a partial
+        // directory that later runs would treat as "already extracted".
+        let partial = dest.with_file_name(format!(
+            ".{}.org3d-partial",
+            dest.file_name().unwrap_or_default().to_string_lossy()
+        ));
+        let _ = std::fs::remove_dir_all(&partial);
+        let res = extract_one(&zip_path, &partial).and_then(|n| {
+            std::fs::rename(&partial, &dest)
+                .with_context(|| format!("renaming into {}", dest.display()))?;
+            Ok(n)
+        });
+        if res.is_err() {
+            let _ = std::fs::remove_dir_all(&partial);
+        }
+        match res {
             Ok(count) => results.push(ExtractResult {
                 zip_path,
                 dest_dir: dest,
@@ -72,7 +88,7 @@ fn extract_one(zip_path: &Path, dest: &Path) -> Result<usize> {
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
-        let raw_name = entry.name().to_string();
+        let raw_name = entry.name()?.into_owned();
 
         // Sanitize path: strip leading `/`, reject `..` traversal
         let safe_name: PathBuf = raw_name
@@ -179,6 +195,20 @@ mod tests {
 
         std::fs::remove_dir_all(&root).ok();
         let _ = results;
+    }
+
+    #[test]
+    fn test_failed_extract_leaves_no_dest_dir() {
+        let root = tmp_dir();
+        std::fs::write(root.join("broken.zip"), b"not a zip").unwrap();
+        let results = extract_all(&root).unwrap();
+        let leftovers: Vec<_> = std::fs::read_dir(&root)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        std::fs::remove_dir_all(&root).ok();
+        assert!(results.is_empty());
+        assert_eq!(leftovers, vec![std::ffi::OsString::from("broken.zip")]);
     }
 
     #[test]

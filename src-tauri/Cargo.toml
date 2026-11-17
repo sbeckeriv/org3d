@@ -20,4 +20,4 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 url = "2"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-rfd = { version = "0.15", features = ["tokio"] }
+rfd = "0.18"

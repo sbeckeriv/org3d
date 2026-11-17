@@ -36,7 +36,7 @@ jobs:
         run: cargo check --package org3d
 
       - name: Clippy
-        run: cargo clippy --package org3d -- -D warnings
+        run: cargo clippy --package org3d --all-targets -- -D warnings
 
       - name: Test
         run: cargo test --package org3d

@@ -22,31 +22,32 @@ path = "src/main.rs"
 # web server
 axum = "0.8"
 tokio = { version = "1", features = ["full"] }
-tower-http = { version = "0.6", features = ["fs"] }
+tower-http = { version = "0.7", features = ["fs", "set-header"] }
+tower = { version = "0.5", features = ["util"] }
 
 # database
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.43", features = ["bundled"] }
 
 # 3d file parsing
-zip = "2"
-roxmltree = "0.20"
+zip = "9"
+roxmltree = "0.21"
 walkdir = "2"
 
 # templating
-minijinja = { version = "2", features = ["loader"] }
+minijinja = { version = "3", features = ["serde"] }
 
 # serialization
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
+toml = "1"
 
 # utilities
 anyhow = "1"
-indicatif = "0.17"
+indicatif = "0.18"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-clap = { version = "4", features = ["derive"] }
+clap = { version = "4", features = ["derive", "env"] }
+jiff = { version = "1", features = ["tzdb-bundle-always"] }
 
 [dev-dependencies]
-tower = { version = "0.5", features = ["util"] }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.13", features = ["json", "form"] }
