@@ -37,12 +37,22 @@ where
     seed(&conn);
     drop(conn);
 
+    let tmp = std::env::temp_dir();
     let cfg = server::AppConfig {
         db_path: db_path.to_str().unwrap().to_string(),
-        thumb_dir: std::env::temp_dir().to_str().unwrap().to_string(),
-        files_root: std::env::temp_dir().to_str().unwrap().to_string(),
-        data_dir: std::env::temp_dir().to_str().unwrap().to_string(),
+        thumb_dir: tmp
+            .join(format!("org3d_test_thumbs_{id}"))
+            .to_string_lossy()
+            .into_owned(),
+        cache_dir: tmp
+            .join(format!("org3d_test_cache_{id}"))
+            .to_string_lossy()
+            .into_owned(),
+        files_root: tmp.to_string_lossy().into_owned(),
+        data_dir: tmp.to_string_lossy().into_owned(),
+        bind: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
         port: 0,
+        ..Default::default()
     };
 
     let app = server::Application::build(cfg).await.unwrap();
@@ -82,6 +92,7 @@ pub async fn spawn_seeded() -> TestApp {
                 dim_z: Some(40.0),
                 thumbnail_path: None,
                 project_id: None,
+                mtime: None,
             },
         )
         .unwrap();
@@ -108,6 +119,7 @@ pub async fn spawn_seeded() -> TestApp {
                 dim_z: Some(20.0),
                 thumbnail_path: None,
                 project_id: None,
+                mtime: None,
             },
         )
         .unwrap();

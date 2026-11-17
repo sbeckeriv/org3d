@@ -1,0 +1,10 @@
+.git
+.github
+.claude
+target
+src-tauri/target
+thumbs
+cache
+org3d.db*
+screenshots
+**/.DS_Store

@@ -43,6 +43,39 @@ cargo build --release
 
 The binary is at `target/release/org3d`. No other dependencies required — SQLite is bundled.
 
+### Docker / Unraid
+
+A headless server image is built from the `Dockerfile` and published to `ghcr.io/sbeckeriv/org3d`. On Unraid, add `unraid/org3d.xml` as a template (Docker → Add Container → Template, or copy it to `/boot/config/plugins/dockerMan/templates-user/`).
+
+```bash
+docker run -d --name org3d -p 3000:3000 --user 99:100 -e TZ=America/Los_Angeles \
+  -e ORG3D_RESCAN_AT=04:00 \
+  -v /mnt/user/appdata/org3d:/config \
+  -v /mnt/user/3d-prints:/library:ro \
+  ghcr.io/sbeckeriv/org3d:latest
+```
+
+**Disk spin-down.** org3d leaves array disks asleep unless it actually needs a file:
+
+- Nothing watches or polls the library. Scans run once on first start (if the DB is empty), then only when you click **Rescan** or at `ORG3D_RESCAN_AT`.
+- A rescan reads only directory metadata (size and mtime) and opens only new or changed files. Install the **Dynamix Cache Directories** plugin to keep the library's directories in RAM. A rescan of an unchanged library then wakes no disks at all.
+- Database, thumbnails and the 3D preview cache live in `/config`. Put it on the cache pool. Viewing a model a second time is served from the cache, so its disk stays asleep. Browser revalidation uses ETags taken from the DB.
+- Downloading a file, or opening a model's 3D preview for the first time, wakes the disk that holds it.
+- Moved or renamed files keep their project, matched by size and mtime. Files that vanish are hidden, not deleted, so a disk that drops out of the array doesn't lose your projects. A scan that would hide more than 25% of the library at once is refused. Hidden rows are purged after `ORG3D_PURGE_MISSING_DAYS` (default 30).
+
+**Security.** There is no login, so keep the port on your LAN or put it behind a reverse proxy with auth. Cross-site POSTs are rejected. Mount `/library` read-only unless you use **Extract ZIPs**.
+
+| Variable | Default (image) | |
+|---|---|---|
+| `ORG3D_LIBRARY` | `/library` | Library folder |
+| `ORG3D_DB` | `/config/org3d.db` | SQLite database |
+| `ORG3D_THUMBS` | `/config/thumbs` | Thumbnails |
+| `ORG3D_CACHE` | `/config/cache` | 3D preview cache |
+| `ORG3D_PREVIEW_CACHE_MB` | `1024` | Preview cache cap (0 = off) |
+| `ORG3D_RESCAN_AT` | unset | Daily rescan `HH:MM` in `TZ` |
+| `ORG3D_PURGE_MISSING_DAYS` | `30` | Days before vanished files are dropped (0 = never) |
+| `ORG3D_PORT` / `ORG3D_BIND` | `3000` / `0.0.0.0` | Listen address |
+
 ## Building from Source
 
 ### Desktop app (Tauri)
@@ -95,10 +128,17 @@ org3d autogroup                Create projects from folder names
 ### Options
 
 ```
---db <path>        SQLite database file  [default: org3d.db]
---thumbs <path>    Thumbnail directory   [default: thumbs]
---port <port>      Port for serve/run    [default: 3000]
+--db <path>                 SQLite database file        [env: ORG3D_DB, default: org3d.db]
+--thumbs <path>             Thumbnail directory         [env: ORG3D_THUMBS, default: thumbs]
+--port <port>               Port for serve/run          [env: ORG3D_PORT, default: 3000]
+--bind <addr>               Listen address              [env: ORG3D_BIND, default: 0.0.0.0]
+--cache <path>              3D preview cache directory  [env: ORG3D_CACHE, default: cache]
+--preview-cache-mb <n>      Preview cache cap, 0 = off  [env: ORG3D_PREVIEW_CACHE_MB, default: 1024]
+--rescan-at <HH:MM>         Daily rescan time           [env: ORG3D_RESCAN_AT]
+--purge-missing-days <n>    Drop vanished files after n days, 0 = never  [default: 30]
 ```
+
+`org3d run` serves immediately and scans in the background if the database is empty. `org3d scan` refuses to hide a large share of the library at once, since that usually means a disk is offline. Pass `--allow-mass-missing` if you really deleted those files.
 
 ### Examples
 

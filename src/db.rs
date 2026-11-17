@@ -3,7 +3,13 @@ use rusqlite::{Connection, params};
 
 pub fn open(path: &str) -> Result<Connection> {
     let conn = Connection::open(path)?;
-    conn.execute_batch("PRAGMA journal_mode=WAL; PRAGMA foreign_keys=ON;")?;
+    // busy_timeout: the background scanner writes in batches on its own
+    // connection; without a timeout, UI writes during a scan fail immediately
+    // with SQLITE_BUSY instead of waiting a few ms for the batch to commit.
+    conn.busy_timeout(std::time::Duration::from_secs(10))?;
+    conn.execute_batch(
+        "PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL; PRAGMA foreign_keys=ON;",
+    )?;
     migrate(&conn)?;
     ensure_fts_sync(&conn)?;
     Ok(conn)
@@ -86,6 +92,13 @@ pub(crate) fn migrate(conn: &Connection) -> Result<()> {
     // Columns added after initial release — ignore error if already present
     let _ = conn.execute("ALTER TABLE models ADD COLUMN project_id INTEGER", []);
     let _ = conn.execute("ALTER TABLE models ADD COLUMN project_name TEXT", []);
+    // Source file mtime (unix seconds). Lets rescans skip unchanged files using
+    // only directory metadata, so array disks holding them don't spin up.
+    let _ = conn.execute("ALTER TABLE models ADD COLUMN mtime INTEGER", []);
+    // Set when a scan can't find the file. The row is hidden but kept (with its
+    // project and thumbnail) so a disk that drops out of the array, or a file
+    // that comes back, doesn't lose curation. Purged after a grace period.
+    let _ = conn.execute("ALTER TABLE models ADD COLUMN missing_since TEXT", []);
 
     // If the FTS table predates project_name, drop and rebuild it cleanly.
     let fts_sql: String = conn
@@ -159,9 +172,10 @@ pub struct ModelRow {
     pub dim_z: Option<f64>,
     pub thumbnail_path: Option<String>,
     pub project_id: Option<i64>,
+    pub mtime: Option<i64>,
 }
 
-#[derive(serde::Serialize)]
+#[derive(serde::Serialize, Debug, Clone)]
 pub struct Project {
     pub id: i64,
     pub name: String,
@@ -183,11 +197,11 @@ impl ModelRow {
 }
 
 pub fn upsert(conn: &Connection, m: &ModelRow) -> Result<i64> {
-    conn.execute(
+    let id: i64 = conn.query_row(
         "INSERT INTO models (path, filename, folder, format, file_size, title, designer,
          description, application, license, created_at, object_count, triangle_count,
-         dim_x, dim_y, dim_z, thumbnail_path)
-         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17)
+         dim_x, dim_y, dim_z, thumbnail_path, mtime)
+         VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,?12,?13,?14,?15,?16,?17,?18)
          ON CONFLICT(path) DO UPDATE SET
            filename=excluded.filename, folder=excluded.folder, file_size=excluded.file_size,
            title=excluded.title, designer=excluded.designer, description=excluded.description,
@@ -196,7 +210,10 @@ pub fn upsert(conn: &Connection, m: &ModelRow) -> Result<i64> {
            triangle_count=excluded.triangle_count, dim_x=excluded.dim_x,
            dim_y=excluded.dim_y, dim_z=excluded.dim_z,
            thumbnail_path=COALESCE(excluded.thumbnail_path, thumbnail_path),
-           indexed_at=datetime('now')",
+           mtime=excluded.mtime,
+           missing_since=NULL,
+           indexed_at=datetime('now')
+         RETURNING id",
         params![
             m.path,
             m.filename,
@@ -214,10 +231,13 @@ pub fn upsert(conn: &Connection, m: &ModelRow) -> Result<i64> {
             m.dim_x,
             m.dim_y,
             m.dim_z,
-            m.thumbnail_path
+            m.thumbnail_path,
+            m.mtime
         ],
+        |r| r.get(0),
     )?;
-    Ok(conn.last_insert_rowid())
+    // last_insert_rowid() is stale on the UPDATE path; RETURNING is always right.
+    Ok(id)
 }
 
 pub fn update_thumbnail(conn: &Connection, id: i64, path: &str) -> Result<()> {
@@ -234,7 +254,7 @@ pub fn list_projects(conn: &Connection) -> Result<Vec<Project>> {
     let mut stmt = conn.prepare(
         "SELECT p.id, p.name, p.notes, COUNT(m.id) as model_count
          FROM projects p
-         LEFT JOIN models m ON m.project_id = p.id
+         LEFT JOIN models m ON m.project_id = p.id AND m.missing_since IS NULL
          GROUP BY p.id ORDER BY p.name COLLATE NOCASE",
     )?;
     let rows = stmt
@@ -296,43 +316,54 @@ pub struct SearchParams<'a> {
     pub offset: i64,
 }
 
+/// Turn free-form user input into a safe FTS5 query: every whitespace-separated
+/// token becomes a quoted prefix term (`"tok"*`), ANDed together. Quoting stops
+/// FTS5 syntax characters (`"`, `-`, `:`, `(`, `NEAR`, …) from turning a search
+/// into a syntax error. Returns None if nothing searchable is left.
+pub fn fts_query(q: &str) -> Option<String> {
+    let terms: Vec<String> = q
+        .split_whitespace()
+        .map(|t| t.replace('"', ""))
+        .filter(|t| !t.is_empty())
+        .map(|t| format!("\"{t}\"*"))
+        .collect();
+    (!terms.is_empty()).then(|| terms.join(" "))
+}
+
 pub fn search(conn: &Connection, p: &SearchParams) -> Result<Vec<ModelRow>> {
-    let rows = if let Some(q) = p.query.filter(|s| !s.is_empty()) {
-        let fts_query = format!("{q}*");
+    let rows = if let Some(fts_query) = p.query.and_then(fts_query) {
         let sql = "
             SELECT m.id, m.path, m.filename, m.folder, m.format, m.file_size,
                    m.title, m.designer, m.description, m.application, m.license,
                    m.created_at, m.object_count, m.triangle_count,
-                   m.dim_x, m.dim_y, m.dim_z, m.thumbnail_path, m.project_id
+                   m.dim_x, m.dim_y, m.dim_z, m.thumbnail_path, m.project_id, m.mtime
             FROM models m
             JOIN models_fts f ON f.rowid = m.id
             WHERE models_fts MATCH ?1
+              AND m.missing_since IS NULL
               AND (?2 IS NULL OR m.designer = ?2)
               AND (?3 IS NULL OR m.folder = ?3)
               AND (?4 IS NULL OR m.format = ?4)
               AND (?5 IS NULL OR m.project_id = ?5)
             ORDER BY rank
             LIMIT ?6 OFFSET ?7";
-        match conn.prepare(sql)?.query_map(
-            params![
-                fts_query, p.designer, p.folder, p.format, p.project, p.limit, p.offset
-            ],
-            row_to_model,
-        ) {
-            Ok(mapped) => mapped.collect::<rusqlite::Result<Vec<_>>>()?,
-            Err(e) => {
-                tracing::warn!("FTS search error for {:?}: {e}", q);
-                vec![]
-            }
-        }
+        conn.prepare(sql)?
+            .query_map(
+                params![
+                    fts_query, p.designer, p.folder, p.format, p.project, p.limit, p.offset
+                ],
+                row_to_model,
+            )?
+            .collect::<rusqlite::Result<Vec<_>>>()?
     } else {
         let sql = "
             SELECT id, path, filename, folder, format, file_size,
                    title, designer, description, application, license,
                    created_at, object_count, triangle_count,
-                   dim_x, dim_y, dim_z, thumbnail_path, project_id
+                   dim_x, dim_y, dim_z, thumbnail_path, project_id, mtime
             FROM models
-            WHERE (?1 IS NULL OR designer = ?1)
+            WHERE missing_since IS NULL
+              AND (?1 IS NULL OR designer = ?1)
               AND (?2 IS NULL OR folder = ?2)
               AND (?3 IS NULL OR format = ?3)
               AND (?4 IS NULL OR project_id = ?4)
@@ -353,7 +384,7 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<Option<ModelRow>> {
         "SELECT id, path, filename, folder, format, file_size,
                 title, designer, description, application, license,
                 created_at, object_count, triangle_count,
-                dim_x, dim_y, dim_z, thumbnail_path, project_id
+                dim_x, dim_y, dim_z, thumbnail_path, project_id, mtime
          FROM models WHERE id = ?1",
     )?;
     let mut rows = stmt.query_map([id], row_to_model)?;
@@ -362,7 +393,7 @@ pub fn get_by_id(conn: &Connection, id: i64) -> Result<Option<ModelRow>> {
 
 pub fn list_designers(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt = conn.prepare(
-        "SELECT DISTINCT designer FROM models WHERE designer IS NOT NULL ORDER BY designer COLLATE NOCASE"
+        "SELECT DISTINCT designer FROM models WHERE designer IS NOT NULL AND missing_since IS NULL ORDER BY designer COLLATE NOCASE"
     )?;
     let rows = stmt
         .query_map([], |r| r.get(0))?
@@ -372,24 +403,37 @@ pub fn list_designers(conn: &Connection) -> Result<Vec<String>> {
 
 pub fn list_folders(conn: &Connection) -> Result<Vec<String>> {
     let mut stmt =
-        conn.prepare("SELECT DISTINCT folder FROM models ORDER BY folder COLLATE NOCASE")?;
+        conn.prepare(
+        "SELECT DISTINCT folder FROM models WHERE missing_since IS NULL ORDER BY folder COLLATE NOCASE",
+    )?;
     let rows = stmt
         .query_map([], |r| r.get(0))?
         .collect::<rusqlite::Result<Vec<String>>>()?;
     Ok(rows)
 }
 
+/// Number of models currently present on disk (excludes missing ones).
 pub fn count(conn: &Connection) -> Result<i64> {
+    Ok(conn.query_row(
+        "SELECT COUNT(*) FROM models WHERE missing_since IS NULL",
+        [],
+        |r| r.get(0),
+    )?)
+}
+
+/// Number of rows including missing ones; used to decide whether a first scan
+/// is needed.
+pub fn count_all(conn: &Connection) -> Result<i64> {
     Ok(conn.query_row("SELECT COUNT(*) FROM models", [], |r| r.get(0))?)
 }
 
 pub fn search_count(conn: &Connection, p: &SearchParams) -> Result<i64> {
-    let n = if let Some(q) = p.query.filter(|s| !s.is_empty()) {
-        let fts_query = format!("{q}*");
+    let n = if let Some(fts_query) = p.query.and_then(fts_query) {
         conn.query_row(
             "SELECT COUNT(*) FROM models m
              JOIN models_fts f ON f.rowid = m.id
              WHERE models_fts MATCH ?1
+               AND m.missing_since IS NULL
                AND (?2 IS NULL OR m.designer = ?2)
                AND (?3 IS NULL OR m.folder = ?3)
                AND (?4 IS NULL OR m.format = ?4)
@@ -400,7 +444,8 @@ pub fn search_count(conn: &Connection, p: &SearchParams) -> Result<i64> {
     } else {
         conn.query_row(
             "SELECT COUNT(*) FROM models
-             WHERE (?1 IS NULL OR designer = ?1)
+             WHERE missing_since IS NULL
+               AND (?1 IS NULL OR designer = ?1)
                AND (?2 IS NULL OR folder = ?2)
                AND (?3 IS NULL OR format = ?3)
                AND (?4 IS NULL OR project_id = ?4)",
@@ -409,6 +454,105 @@ pub fn search_count(conn: &Connection, p: &SearchParams) -> Result<i64> {
         )?
     };
     Ok(n)
+}
+
+/// What the scanner needs to decide whether a file changed, without opening it.
+pub struct KnownFile {
+    pub id: i64,
+    pub file_size: i64,
+    pub mtime: Option<i64>,
+    pub thumbnail_path: Option<String>,
+    pub missing: bool,
+}
+
+pub fn known_files(conn: &Connection) -> Result<std::collections::HashMap<String, KnownFile>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, path, file_size, mtime, thumbnail_path, missing_since IS NOT NULL FROM models",
+    )?;
+    let rows = stmt
+        .query_map([], |r| {
+            Ok((
+                r.get::<_, String>(1)?,
+                KnownFile {
+                    id: r.get(0)?,
+                    file_size: r.get(2)?,
+                    mtime: r.get(3)?,
+                    thumbnail_path: r.get(4)?,
+                    missing: r.get(5)?,
+                },
+            ))
+        })?
+        .collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+pub fn mark_missing(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute(
+        "UPDATE models SET missing_since = datetime('now') WHERE id = ?1 AND missing_since IS NULL",
+        [id],
+    )?;
+    Ok(())
+}
+
+pub fn mark_present(conn: &Connection, id: i64) -> Result<()> {
+    conn.execute("UPDATE models SET missing_since = NULL WHERE id = ?1", [id])?;
+    Ok(())
+}
+
+/// Point an existing row at a file's new location (move/rename detected by
+/// matching size + mtime). Keeps id, project, and thumbnail.
+pub fn relocate(
+    conn: &Connection,
+    id: i64,
+    new_path: &str,
+    filename: &str,
+    folder: &str,
+) -> Result<()> {
+    conn.execute(
+        "UPDATE models SET path = ?1, filename = ?2, folder = ?3, missing_since = NULL
+         WHERE id = ?4",
+        params![new_path, filename, folder, id],
+    )?;
+    Ok(())
+}
+
+/// Delete rows missing for longer than `days`; returns their thumbnail paths.
+pub fn purge_missing(conn: &Connection, days: u32) -> Result<Vec<Option<String>>> {
+    let modifier = format!("-{days} days");
+    let mut stmt = conn.prepare(
+        "DELETE FROM models
+         WHERE missing_since IS NOT NULL AND missing_since < datetime('now', ?1)
+         RETURNING thumbnail_path",
+    )?;
+    let thumbs = stmt
+        .query_map([modifier], |r| r.get(0))?
+        .collect::<rusqlite::Result<Vec<Option<String>>>>()?;
+    Ok(thumbs)
+}
+
+/// Lightweight lookup for file-serving handlers: just enough to locate the
+/// file and build a cache key, so the DB lock is held as briefly as possible.
+pub struct FileRef {
+    pub path: String,
+    pub filename: String,
+    pub format: String,
+    pub file_size: i64,
+    pub mtime: Option<i64>,
+}
+
+pub fn file_ref(conn: &Connection, id: i64) -> Result<Option<FileRef>> {
+    let mut stmt =
+        conn.prepare("SELECT path, filename, format, file_size, mtime FROM models WHERE id = ?1")?;
+    let mut rows = stmt.query_map([id], |r| {
+        Ok(FileRef {
+            path: r.get(0)?,
+            filename: r.get(1)?,
+            format: r.get(2)?,
+            file_size: r.get(3)?,
+            mtime: r.get(4)?,
+        })
+    })?;
+    Ok(rows.next().transpose()?)
 }
 
 pub fn rename_model(
@@ -445,6 +589,7 @@ fn row_to_model(r: &rusqlite::Row) -> rusqlite::Result<ModelRow> {
         dim_z: r.get(16)?,
         thumbnail_path: r.get(17)?,
         project_id: r.get(18)?,
+        mtime: r.get(19)?,
     })
 }
 
@@ -464,7 +609,7 @@ mod tests {
         ModelRow {
             id: 0,
             path: path.to_string(),
-            filename: path.split('/').last().unwrap_or(path).to_string(),
+            filename: path.split('/').next_back().unwrap_or(path).to_string(),
             folder: folder.to_string(),
             format: format.to_string(),
             file_size: 1024,
@@ -481,6 +626,7 @@ mod tests {
             dim_z: Some(20.0),
             thumbnail_path: None,
             project_id: None,
+            mtime: None,
         }
     }
 
@@ -641,6 +787,48 @@ mod tests {
         )
         .unwrap();
         assert_eq!(results.len(), 1);
+    }
+
+    #[test]
+    fn test_fts_query_escapes_syntax() {
+        assert_eq!(fts_query("  "), None);
+        assert_eq!(fts_query("\"\""), None);
+        assert_eq!(
+            fts_query("dragon -foo"),
+            Some("\"dragon\"* \"-foo\"*".into())
+        );
+        let conn = test_db();
+        upsert(
+            &conn,
+            &sample_row("/tmp/a.stl", "Dragon", "Alice", "/", "STL"),
+        )
+        .unwrap();
+        for q in ["\"", "a:b", "(x", "NEAR(", "-", "dra*"] {
+            let p = SearchParams {
+                query: Some(q),
+                designer: None,
+                folder: None,
+                format: None,
+                project: None,
+                limit: 50,
+                offset: 0,
+            };
+            assert!(search(&conn, &p).is_ok(), "query {q:?} should not error");
+            assert!(
+                search_count(&conn, &p).is_ok(),
+                "count {q:?} should not error"
+            );
+        }
+    }
+
+    #[test]
+    fn test_upsert_returns_existing_id_on_update() {
+        let conn = test_db();
+        let a = upsert(&conn, &sample_row("/tmp/a.stl", "A", "Alice", "/", "STL")).unwrap();
+        let b = upsert(&conn, &sample_row("/tmp/b.stl", "B", "Bob", "/", "STL")).unwrap();
+        let a2 = upsert(&conn, &sample_row("/tmp/a.stl", "A2", "Alice", "/", "STL")).unwrap();
+        assert_ne!(a, b);
+        assert_eq!(a, a2);
     }
 
     #[test]

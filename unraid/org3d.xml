@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<Container version="2">
+  <Name>org3d</Name>
+  <Repository>ghcr.io/sbeckeriv/org3d:latest</Repository>
+  <Registry>https://github.com/sbeckeriv/org3d/pkgs/container/org3d</Registry>
+  <Network>bridge</Network>
+  <Shell>sh</Shell>
+  <Privileged>false</Privileged>
+  <Support>https://github.com/sbeckeriv/org3d/issues</Support>
+  <Project>https://github.com/sbeckeriv/org3d</Project>
+  <Overview>Local gallery and organiser for 3D print files (3MF/STL): search, 3D preview, projects. Built to leave array disks asleep: rescans only read new or changed files, 3D previews are cached on appdata, and nothing polls the library in the background. The web UI has no login, so keep it on your LAN.</Overview>
+  <Category>Tools: MediaApp:Other</Category>
+  <WebUI>http://[IP]:[PORT:3000]/</WebUI>
+  <Icon>https://raw.githubusercontent.com/sbeckeriv/org3d/main/icon.png</Icon>
+  <ExtraParams>--user 99:100</ExtraParams>
+  <PostArgs/>
+  <Requires/>
+  <Config Name="Web UI port" Target="3000" Default="3000" Mode="tcp" Description="Port for the web UI." Type="Port" Display="always" Required="true" Mask="false">3000</Config>
+  <Config Name="Library" Target="/library" Default="/mnt/user/3d-prints" Mode="ro" Description="Folder with your 3MF/STL files. Read-only by default. Change to rw if you want to use Settings → Extract ZIPs, which writes extracted folders next to each ZIP." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/3d-prints</Config>
+  <Config Name="Appdata" Target="/config" Default="/mnt/user/appdata/org3d" Mode="rw" Description="Database, thumbnails and preview cache. Keep it on the cache pool, never the array: put appdata on a cache-only or exclusive share, or use /mnt/cache/appdata/org3d. SQLite WAL mode has problems over the /mnt/user FUSE layer if the share is not exclusive." Type="Path" Display="always" Required="true" Mask="false">/mnt/user/appdata/org3d</Config>
+  <Config Name="Daily rescan time" Target="ORG3D_RESCAN_AT" Default="" Mode="" Description="HH:MM (24h, container TZ) to rescan once a day, e.g. 04:00. Leave empty to rescan manually only. Unchanged files are skipped using directory metadata. With the Cache Dirs plugin keeping the library's directories in RAM, a rescan only wakes disks whose files actually changed." Type="Variable" Display="always" Required="false" Mask="false"/>
+  <Config Name="Preview cache (MiB)" Target="ORG3D_PREVIEW_CACHE_MB" Default="1024" Mode="" Description="Disk space on appdata for cached 3D previews, so viewing a model again doesn't wake its disk. 0 turns the cache off." Type="Variable" Display="advanced" Required="false" Mask="false">1024</Config>
+  <Config Name="Purge missing after (days)" Target="ORG3D_PURGE_MISSING_DAYS" Default="30" Mode="" Description="Files that disappear are hidden but kept, with their project, for this many days in case a disk was only offline. After that they are deleted from the index. 0 keeps them forever." Type="Variable" Display="advanced" Required="false" Mask="false">30</Config>
+  <Config Name="Log level" Target="RUST_LOG" Default="org3d=info" Mode="" Description="Log filter, e.g. org3d=debug." Type="Variable" Display="advanced" Required="false" Mask="false">org3d=info</Config>
+</Container>

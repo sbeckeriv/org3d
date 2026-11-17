@@ -160,7 +160,10 @@ pub fn to_binary_stl(path: &Path) -> Result<Vec<u8>> {
     let mut archive = zip::ZipArchive::new(file).context("not a valid zip/3mf")?;
 
     // Load every .model file in the ZIP into memory, keyed by normalised path
-    let all_names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let all_names: Vec<String> = archive
+        .file_names()
+        .filter_map(|s| s.ok().map(|s| s.into_owned()))
+        .collect();
     let mut xml_by_path: std::collections::HashMap<String, String> =
         std::collections::HashMap::new();
 
@@ -361,7 +364,10 @@ fn write_binary_stl(verts: &[[f32; 3]], tris: &[[u32; 3]]) -> Vec<u8> {
 
 fn read_model_xml(archive: &mut zip::ZipArchive<std::fs::File>) -> Result<String> {
     // Try the standard path first, then scan for any .model file
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .filter_map(|s| s.ok().map(|s| s.into_owned()))
+        .collect();
 
     let model_path = names
         .iter()
@@ -377,7 +383,10 @@ fn read_model_xml(archive: &mut zip::ZipArchive<std::fs::File>) -> Result<String
 }
 
 fn extract_thumbnail(archive: &mut zip::ZipArchive<std::fs::File>) -> Option<Vec<u8>> {
-    let names: Vec<String> = archive.file_names().map(|s| s.to_string()).collect();
+    let names: Vec<String> = archive
+        .file_names()
+        .filter_map(|s| s.ok().map(|s| s.into_owned()))
+        .collect();
 
     // Prefer the plate render, fall back to smaller thumbnails
     let preferred = [
@@ -655,7 +664,6 @@ mod tests {
     fn test_stl_transform_applied() {
         // Two instances of the same shape: one at identity, one translated by (100, 0, 0)
         // The second triangle's vertices should have x-coords around 100.
-        let obj_xml = make_obj_xml(10.0, 10.0, 10.0);
         // identity transform for instance 1, translate +100 on X for instance 2
         let obj1 = make_obj_xml_id(1, 10.0, 10.0, 10.0);
         let obj2 = make_obj_xml_id(2, 10.0, 10.0, 10.0);

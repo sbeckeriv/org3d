@@ -237,39 +237,34 @@ pub fn run() {
             std::fs::create_dir_all(&settings.thumb_dir)?;
 
             let data_dir = app_data_dir.to_string_lossy().into_owned();
+            let cache_dir = app_data_dir.join("cache");
             let (port_tx, port_rx) = std::sync::mpsc::channel::<u16>();
 
             tauri::async_runtime::spawn(async move {
-                // Background scan if base folder is set.
-                if settings.is_configured() {
-                    let db_path = settings.db_path.clone();
-                    let base = settings.base_folder.clone();
-                    let thumbs = settings.thumb_dir.clone();
-                    let rescan = settings.rescan_on_startup;
-                    tokio::task::spawn_blocking(move || {
-                        if let Ok(conn) = org3d::db::open(&db_path) {
-                            let existing = org3d::db::count(&conn).unwrap_or(0);
-                            if rescan || existing == 0 {
-                                let _ = org3d::scanner::scan(
-                                    &conn,
-                                    std::path::Path::new(&base),
-                                    std::path::Path::new(&thumbs),
-                                );
-                            }
-                        }
-                    });
-                }
-
+                let configured = settings.is_configured();
+                let rescan = settings.rescan_on_startup;
+                let db_path = settings.db_path.clone();
                 let cfg = server::AppConfig {
                     db_path: settings.db_path,
                     thumb_dir: settings.thumb_dir,
+                    cache_dir: cache_dir.to_string_lossy().into_owned(),
                     files_root: settings.base_folder,
+                    // Desktop app: never expose the UI to the LAN.
+                    bind: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
                     port: settings.port,
                     data_dir,
+                    mode: server::Mode::Desktop,
+                    ..Default::default()
                 };
 
                 match server::Application::build(cfg).await {
                     Ok(server_app) => {
+                        let existing = org3d::db::open(&db_path)
+                            .and_then(|c| org3d::db::count_all(&c))
+                            .unwrap_or(0);
+                        if configured && (rescan || existing == 0) {
+                            server_app.start_scan();
+                        }
                         let update_banner = server_app.update_banner();
                         port_tx.send(server_app.port()).ok();
                         #[cfg(target_os = "macos")]

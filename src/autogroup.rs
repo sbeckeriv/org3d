@@ -22,7 +22,7 @@ pub fn run(conn: &Connection) -> Result<AutogroupStats> {
 
     // Collect unassigned models grouped by folder
     let mut stmt =
-        conn.prepare("SELECT id, folder FROM models WHERE project_id IS NULL ORDER BY folder")?;
+        conn.prepare("SELECT id, folder FROM models WHERE project_id IS NULL AND missing_since IS NULL ORDER BY folder")?;
     let pairs: Vec<(i64, String)> = stmt
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<rusqlite::Result<_>>()?;
@@ -210,6 +210,7 @@ mod tests {
             dim_z: None,
             thumbnail_path: None,
             project_id: None,
+            mtime: None,
         };
 
         // Three files in a deep project folder
@@ -283,6 +284,7 @@ mod tests {
             dim_z: None,
             thumbnail_path: None,
             project_id: None,
+            mtime: None,
         };
 
         crate::db::upsert(

@@ -14,6 +14,10 @@ pub struct Settings {
 
 impl Settings {
     pub fn config_dir() -> PathBuf {
+        // Explicit override, used by the Docker image (/config on appdata).
+        if let Some(dir) = std::env::var_os("ORG3D_CONFIG_DIR").filter(|d| !d.is_empty()) {
+            return PathBuf::from(dir);
+        }
         #[cfg(target_os = "macos")]
         {
             let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
@@ -37,7 +41,10 @@ impl Settings {
 
     pub fn load() -> Self {
         match std::fs::read_to_string(Self::config_file()) {
-            Ok(s) => toml::from_str(&s).unwrap_or_default(),
+            Ok(s) => toml::from_str(&s).unwrap_or_else(|e| {
+                tracing::warn!("ignoring unreadable {}: {e}", Self::config_file().display());
+                Settings::default()
+            }),
             Err(_) => Settings::default(),
         }
     }
@@ -46,7 +53,10 @@ impl Settings {
         let dir = Self::config_dir();
         std::fs::create_dir_all(&dir)?;
         let s = toml::to_string_pretty(self)?;
-        std::fs::write(Self::config_file(), s)?;
+        // Write-then-rename so a crash mid-write can't leave a truncated config.
+        let tmp = dir.join("config.toml.tmp");
+        std::fs::write(&tmp, s)?;
+        std::fs::rename(&tmp, Self::config_file())?;
         Ok(())
     }
 
