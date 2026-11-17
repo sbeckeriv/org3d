@@ -48,8 +48,10 @@ The binary is at `target/release/org3d`. No other dependencies required — SQLi
 A headless server image is built from the `Dockerfile` and published to `ghcr.io/sbeckeriv/org3d`. On Unraid, add `unraid/org3d.xml` as a template (Docker → Add Container → Template, or copy it to `/boot/config/plugins/dockerMan/templates-user/`).
 
 ```bash
-docker run -d --name org3d -p 3000:3000 --user 99:100 -e TZ=America/Los_Angeles \
-  -e ORG3D_RESCAN_AT=04:00 \
+docker run -d --name org3d -p 3000:3000 -e TZ=America/Los_Angeles \
+  -e ORG3D_AUTH='me:a-long-password' -e ORG3D_RESCAN_AT=04:00 \
+  --read-only --cap-drop ALL --security-opt no-new-privileges \
+  --memory 2g --pids-limit 256 \
   -v /mnt/user/appdata/org3d:/config \
   -v /mnt/user/3d-prints:/library:ro \
   ghcr.io/sbeckeriv/org3d:latest
@@ -63,7 +65,12 @@ docker run -d --name org3d -p 3000:3000 --user 99:100 -e TZ=America/Los_Angeles 
 - Downloading a file, or opening a model's 3D preview for the first time, wakes the disk that holds it.
 - Moved or renamed files keep their project, matched by size and mtime. Files that vanish are hidden, not deleted, so a disk that drops out of the array doesn't lose your projects. A scan that would hide more than 25% of the library at once is refused. Hidden rows are purged after `ORG3D_PURGE_MISSING_DAYS` (default 30).
 
-**Security.** There is no login, so keep the port on your LAN or put it behind a reverse proxy with auth. Cross-site POSTs are rejected. Mount `/library` read-only unless you use **Extract ZIPs**.
+**Security.**
+
+- **Login.** Set `ORG3D_AUTH=user:password` to require a login for everything except the health check. Without it, anyone who can reach the port can rescan, extract into the library and change projects; the server logs a warning at startup. Basic auth over plain HTTP can be sniffed on your LAN, so use a password you don't use elsewhere. For access from outside the LAN, use a reverse proxy with TLS. Failed logins are logged and delayed by a second.
+- **Cross-site requests.** Cross-site POSTs are rejected.
+- **Container.** The image runs as 99:100 (nobody:users) and only writes to `/config` (and `/library` for **Extract ZIPs**), so it works with `--read-only`, `--cap-drop ALL` and `no-new-privileges`. The Unraid template sets these, plus a 2 GB memory cap. Mount `/library` read-only unless you use **Extract ZIPs**.
+- **Untrusted files.** Large models are parsed and previewed with constant memory where possible; at most 2 3MF previews are converted at once. ZIP and 3MF entries are capped (1 GiB per 3MF part, 8 GiB per extracted file, 32 GiB per archive) and anything compressed more than 200× is rejected as a likely zip bomb.
 
 | Variable | Default (image) | |
 |---|---|---|
@@ -75,6 +82,7 @@ docker run -d --name org3d -p 3000:3000 --user 99:100 -e TZ=America/Los_Angeles 
 | `ORG3D_RESCAN_AT` | unset | Daily rescan `HH:MM` in `TZ` |
 | `ORG3D_PURGE_MISSING_DAYS` | `30` | Days before vanished files are dropped (0 = never) |
 | `ORG3D_PORT` / `ORG3D_BIND` | `3000` / `0.0.0.0` | Listen address |
+| `ORG3D_AUTH` | unset | `user:password` login (password ≥ 8 chars) |
 
 ## Building from Source
 

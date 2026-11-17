@@ -1,3 +1,4 @@
+pub mod auth;
 pub mod autogroup;
 pub mod db;
 pub mod extract;

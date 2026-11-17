@@ -63,6 +63,11 @@ async fn preview_is_cached_and_revalidates_without_the_library() {
     let r = app.get("/stl/1").await;
     assert_eq!(r.status(), 200);
     let etag = r.headers()["etag"].to_str().unwrap().to_string();
+    assert_eq!(
+        r.headers()["content-length"],
+        "134",
+        "streamed with a length"
+    );
     assert_eq!(r.bytes().await.unwrap().len(), 134);
 
     // Library disk "asleep"/gone: both a cache hit and a 304 must still work.

@@ -51,6 +51,16 @@ struct ServeOpts {
     /// (losing its project assignment). 0 = never purge.
     #[arg(long, env = "ORG3D_PURGE_MISSING_DAYS", default_value_t = 30)]
     purge_missing_days: u32,
+
+    /// Require a login, as `user:password` (password ≥ 8 chars).
+    /// Strongly recommended when the port is reachable from your LAN.
+    #[arg(
+        long,
+        env = "ORG3D_AUTH",
+        hide_env_values = true,
+        value_parser = org3d::auth::Credentials::parse
+    )]
+    auth: Option<org3d::auth::Credentials>,
 }
 
 #[derive(Subcommand)]
@@ -120,6 +130,7 @@ fn app_config(cli_db: &str, cli_thumbs: &str, o: &ServeOpts) -> server::AppConfi
         rescan_at: o.rescan_at,
         preview_cache_bytes: o.preview_cache_mb.saturating_mul(1024 * 1024),
         purge_missing_days: o.purge_missing_days,
+        auth: o.auth.clone(),
     }
 }
 

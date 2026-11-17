@@ -4,6 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
+  schedule:
+    - cron: "17 6 * * 1" # Mondays: pick up new RustSec advisories
 
 env:
   CARGO_TERM_COLOR: always
@@ -43,3 +45,20 @@ jobs:
 
       - name: Check Tauri app (Linux)
         run: cargo check --package org3d-app
+
+  # Fails on any RustSec vulnerability in Cargo.lock. "Unmaintained" and
+  # "unsound" notices (currently only Tauri's Linux GTK stack) are warnings.
+  # Also runs weekly so new advisories surface without a code change.
+  audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-audit
+
+      - name: cargo audit
+        run: cargo audit

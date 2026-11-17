@@ -18,7 +18,7 @@ use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
 
 use crate::db::{self, ModelRow};
-use crate::preview::PreviewCache;
+use crate::preview::{Preview, PreviewCache};
 
 // ── Application bootstrap ────────────────────────────────────────────────────
 
@@ -52,6 +52,9 @@ pub struct AppConfig {
     /// Days a vanished file stays hidden-but-restorable before its row (and
     /// project assignment) is deleted. 0 = keep forever.
     pub purge_missing_days: u32,
+    /// Require HTTP Basic auth for everything except /health_check. Ignored
+    /// in desktop mode (loopback only).
+    pub auth: Option<crate::auth::Credentials>,
 }
 
 impl Default for AppConfig {
@@ -68,6 +71,7 @@ impl Default for AppConfig {
             rescan_at: None,
             preview_cache_bytes: 1024 * 1024 * 1024,
             purge_missing_days: 30,
+            auth: None,
         }
     }
 }
@@ -115,6 +119,11 @@ impl Application {
             rescan_at: cfg.rescan_at,
             preview_cache_bytes: cfg.preview_cache_bytes,
             purge_missing_days: cfg.purge_missing_days,
+            auth: match cfg.mode {
+                Mode::Server => cfg.auth.map(Arc::new),
+                Mode::Desktop => None,
+            },
+            preview_builds: tokio::sync::Semaphore::new(MAX_PREVIEW_BUILDS),
             scanning: AtomicBool::new(false),
             progress: Arc::new(crate::scanner::ScanProgress::default()),
             last_scan: Mutex::new(None),
@@ -145,14 +154,23 @@ impl Application {
         if let Some(at) = self.state.rescan_at {
             tokio::spawn(rescan_loop(self.state.clone(), at));
         }
-        tracing::info!(
-            "listening on http://{}:{}",
-            self.listener.local_addr()?.ip(),
-            self.port
-        );
-        axum::serve(self.listener, make_router(self.state))
-            .with_graceful_shutdown(shutdown_signal())
-            .await?;
+        let ip = self.listener.local_addr()?.ip();
+        tracing::info!("listening on http://{ip}:{}", self.port);
+        match &self.state.auth {
+            Some(c) => tracing::info!("login required (user {:?})", c.user()),
+            None if self.state.mode == Mode::Server && !ip.is_loopback() => tracing::warn!(
+                "no ORG3D_AUTH set: anyone who can reach port {} can rescan, extract into \
+                 the library, and change projects",
+                self.port
+            ),
+            None => {}
+        }
+        axum::serve(
+            self.listener,
+            make_router(self.state).into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .with_graceful_shutdown(shutdown_signal())
+        .await?;
         Ok(())
     }
 }
@@ -193,6 +211,9 @@ async fn rescan_loop(state: SharedState, at: jiff::civil::Time) {
     }
 }
 
+/// Concurrent preview builds (3MF → STL conversions hold the mesh in RAM).
+const MAX_PREVIEW_BUILDS: usize = 2;
+
 // ── State ────────────────────────────────────────────────────────────────────
 
 pub struct AppState {
@@ -209,6 +230,8 @@ pub struct AppState {
     pub rescan_at: Option<jiff::civil::Time>,
     pub preview_cache_bytes: u64,
     pub purge_missing_days: u32,
+    auth: Option<Arc<crate::auth::Credentials>>,
+    preview_builds: tokio::sync::Semaphore,
     pub scanning: AtomicBool,
     progress: Arc<crate::scanner::ScanProgress>,
     last_scan: Mutex<Option<ScanReport>>,
@@ -502,6 +525,11 @@ pub fn make_router(state: SharedState) -> Router {
         .route("/api/model/{id}/project", delete(clear_project))
         .nest_service("/thumbs", ServeDir::new(&thumb_dir))
         .layer(middleware::from_fn(reject_cross_site_writes))
+        // Outermost: unauthenticated requests are refused before anything else.
+        .layer(middleware::from_fn_with_state(
+            state.auth.clone(),
+            crate::auth::require_auth,
+        ))
         .with_state(state)
 }
 
@@ -755,23 +783,62 @@ async fn serve_as_stl(
     {
         return (StatusCode::NOT_MODIFIED, [(header::ETAG, etag)]).into_response();
     }
+    let headers = [
+        (header::CONTENT_TYPE, "model/stl".to_string()),
+        (header::ETAG, etag),
+        (header::CACHE_CONTROL, "no-cache".to_string()),
+    ];
+
+    // Cache hit: stream from the SSD; no build slot needed.
     let st = state.clone();
-    match tokio::task::spawn_blocking(move || st.preview.get_or_build(id, &f)).await {
-        Ok(Ok(bytes)) => (
-            [
-                (header::CONTENT_TYPE, "model/stl".to_string()),
-                (header::ETAG, etag),
-                (header::CACHE_CONTROL, "no-cache".to_string()),
-            ],
-            bytes,
-        )
-            .into_response(),
+    let f2 = f.clone();
+    if let Ok(Some(p)) = tokio::task::spawn_blocking(move || st.preview.cached(id, &f2)).await {
+        return stream_file(&p, headers).await;
+    }
+
+    // Miss: building a 3MF preview holds the whole mesh in memory, so only a
+    // few may run at once; the rest wait their turn instead of piling up RAM.
+    let Ok(_permit) = state.preview_builds.acquire().await else {
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    };
+    let st = state.clone();
+    match tokio::task::spawn_blocking(move || st.preview.build(id, &f)).await {
+        Ok(Ok(Preview::File(p))) => stream_file(&p, headers).await,
+        Ok(Ok(Preview::Bytes(bytes))) => (headers, bytes).into_response(),
         Ok(Err(e)) => {
             tracing::warn!("preview {id}: {e:#}");
             (StatusCode::NOT_FOUND, "could not read model").into_response()
         }
         Err(_) => StatusCode::INTERNAL_SERVER_ERROR.into_response(),
     }
+}
+
+/// Stream a file as the response body with constant memory.
+async fn stream_file(
+    path: &std::path::Path,
+    headers: [(header::HeaderName, String); 3],
+) -> Response {
+    let file = match tokio::fs::File::open(path).await {
+        Ok(f) => f,
+        Err(e) => {
+            tracing::warn!("open {}: {e}", path.display());
+            return (StatusCode::NOT_FOUND, "could not read model").into_response();
+        }
+    };
+    let len = file.metadata().await.map(|m| m.len()).ok();
+    let mut res = (
+        headers,
+        Body::from_stream(tokio_util::io::ReaderStream::with_capacity(
+            file,
+            256 * 1024,
+        )),
+    )
+        .into_response();
+    if let Some(len) = len {
+        res.headers_mut()
+            .insert(header::CONTENT_LENGTH, HeaderValue::from(len));
+    }
+    res
 }
 
 /// Stream the original file (supports Range / conditional requests) without
@@ -932,6 +999,7 @@ fn settings_ctx(
             cache_dir => &state.cache_dir,
             preview_cache_mb => state.preview_cache_bytes / (1024 * 1024),
             purge_missing_days => state.purge_missing_days,
+            auth_user => state.auth.as_ref().map(|c| c.user().to_string()),
             rescan_at => state.rescan_at.map(|t| t.strftime("%H:%M").to_string()),
         },
     }

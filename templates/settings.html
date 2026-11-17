@@ -99,6 +99,7 @@ table.runtime td { padding: .4rem 0; word-break: break-all; }
     <tr><th>Thumbnails</th><td>{{ runtime.thumb_dir }}</td></tr>
     <tr><th>Preview cache</th><td>{{ runtime.cache_dir }} ({% if runtime.preview_cache_mb %}up to {{ runtime.preview_cache_mb }} MiB{% else %}disabled{% endif %})</td></tr>
     <tr><th>Scheduled rescan</th><td>{% if runtime.rescan_at %}daily at {{ runtime.rescan_at }}{% else %}off (manual only){% endif %}</td></tr>
+    <tr><th>Login</th><td>{% if runtime.auth_user %}required (user {{ runtime.auth_user }}){% else %}<span style="color:#d9a35b">off — anyone on the network can use this server</span>{% endif %}</td></tr>
     <tr><th>Purge missing after</th><td>{% if runtime.purge_missing_days %}{{ runtime.purge_missing_days }} days{% else %}never{% endif %}</td></tr>
   </table>
   {% else %}

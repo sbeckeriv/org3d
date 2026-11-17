@@ -38,6 +38,15 @@ pub async fn spawn_app<F>(seed: F) -> TestApp
 where
     F: FnOnce(&rusqlite::Connection),
 {
+    spawn_app_with(|_| {}, seed).await
+}
+
+/// Like `spawn_app`, but lets the test adjust the config (e.g. enable auth).
+pub async fn spawn_app_with<C, F>(configure: C, seed: F) -> TestApp
+where
+    C: FnOnce(&mut server::AppConfig),
+    F: FnOnce(&rusqlite::Connection),
+{
     let id = TEST_ID.fetch_add(1, Ordering::SeqCst);
     let tmp = std::env::temp_dir();
     let tag = format!("{}_{id}", std::process::id());
@@ -53,7 +62,7 @@ where
     drop(conn);
 
     let s = |p: &PathBuf| p.to_string_lossy().into_owned();
-    let cfg = server::AppConfig {
+    let mut cfg = server::AppConfig {
         db_path: s(&db_path),
         thumb_dir: s(&thumbs),
         cache_dir: s(&cache),
@@ -65,6 +74,7 @@ where
         ..Default::default()
     };
 
+    configure(&mut cfg);
     let app = server::Application::build(cfg).await.unwrap();
     let port = app.port();
     tokio::spawn(app.run());

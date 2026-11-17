@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use std::io::Read;
 use std::path::{Path, PathBuf};
 use walkdir::WalkDir;
 
@@ -95,6 +96,10 @@ pub fn extract_all(root: &Path) -> Result<Vec<ExtractResult>> {
     Ok(results)
 }
 
+/// Refuse archives that would expand beyond this on disk.
+const MAX_ARCHIVE_BYTES: u64 = 32 << 30;
+const MAX_ENTRIES: usize = 100_000;
+
 fn extract_one(zip_path: &Path, dest: &Path) -> Result<usize> {
     std::fs::create_dir_all(dest).with_context(|| format!("creating {}", dest.display()))?;
 
@@ -102,7 +107,11 @@ fn extract_one(zip_path: &Path, dest: &Path) -> Result<usize> {
     let mut archive = zip::ZipArchive::new(file)
         .with_context(|| format!("opening zip {}", zip_path.display()))?;
 
+    if archive.len() > MAX_ENTRIES {
+        anyhow::bail!("zip has {} entries (limit {MAX_ENTRIES})", archive.len());
+    }
     let mut count = 0;
+    let mut total: u64 = 0;
 
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
@@ -126,9 +135,22 @@ fn extract_one(zip_path: &Path, dest: &Path) -> Result<usize> {
             if let Some(parent) = out_path.parent() {
                 std::fs::create_dir_all(parent)?;
             }
+            crate::formats::TO_DISK.check(&entry)?;
             let mut out = std::fs::File::create(&out_path)
                 .with_context(|| format!("creating {}", out_path.display()))?;
-            std::io::copy(&mut entry, &mut out)?;
+            // Enforce the limits on actual bytes, not the (forgeable) header.
+            let limit = crate::formats::TO_DISK.max_entry;
+            let n = std::io::copy(&mut (&mut entry).take(limit + 1), &mut out)?;
+            if n > limit {
+                anyhow::bail!("{raw_name} exceeds {} MiB", limit >> 20);
+            }
+            total += n;
+            if total > MAX_ARCHIVE_BYTES {
+                anyhow::bail!(
+                    "archive expands to more than {} GiB",
+                    MAX_ARCHIVE_BYTES >> 30
+                );
+            }
             count += 1;
         }
     }

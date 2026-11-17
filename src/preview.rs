@@ -12,6 +12,14 @@ use std::time::SystemTime;
 
 use crate::db::FileRef;
 
+/// Where to get preview bytes from.
+pub enum Preview {
+    /// Stream this file (a cache entry, or an STL straight from the library).
+    File(PathBuf),
+    /// Freshly converted mesh already in memory.
+    Bytes(Vec<u8>),
+}
+
 pub struct PreviewCache {
     dir: PathBuf,
     max_bytes: u64,
@@ -30,36 +38,77 @@ impl PreviewCache {
         format!("{id}-{}-{}", f.file_size, f.mtime.unwrap_or(0))
     }
 
-    /// Return STL bytes for the model, from cache if possible. Blocking.
-    pub fn get_or_build(&self, id: i64, f: &FileRef) -> Result<Vec<u8>> {
-        let key = Self::key(id, f);
-        let cached = self.dir.join(format!("{key}.stl"));
-        if self.max_bytes > 0
-            && let Ok(bytes) = std::fs::read(&cached)
-        {
-            touch(&cached);
-            return Ok(bytes);
-        }
-
-        let bytes = if f.format == "STL" {
-            std::fs::read(&f.path)?
-        } else {
-            crate::formats::threemf::to_binary_stl(Path::new(&f.path))?
-        };
-
-        if self.max_bytes > 0
-            && (bytes.len() as u64) <= self.max_bytes
-            && let Err(e) = self.store(&key, &cached, &bytes)
-        {
-            tracing::warn!("preview cache write failed: {e}");
-        }
-        Ok(bytes)
+    fn path_for(&self, key: &str) -> PathBuf {
+        self.dir.join(format!("{key}.stl"))
     }
 
-    fn store(&self, key: &str, path: &Path, bytes: &[u8]) -> Result<()> {
+    /// Cached preview for this model, if any. Touches it for LRU. Never
+    /// reads the library, so it's safe to call before taking a build slot.
+    pub fn cached(&self, id: i64, f: &FileRef) -> Option<PathBuf> {
+        if self.max_bytes == 0 {
+            return None;
+        }
+        let p = self.path_for(&Self::key(id, f));
+        p.is_file().then(|| {
+            touch(&p);
+            p
+        })
+    }
+
+    /// Produce STL for the model, reading the library. Blocking.
+    ///
+    /// STL sources are never loaded into memory: they're copied into the
+    /// cache (or, if caching is off/too small, served straight from the
+    /// library). Only 3MF conversion has to build the mesh in memory.
+    pub fn build(&self, id: i64, f: &FileRef) -> Result<Preview> {
+        let key = Self::key(id, f);
+        let cached = self.path_for(&key);
+        let fits = self.max_bytes > 0 && (f.file_size.max(0) as u64) <= self.max_bytes;
+
+        if f.format == "STL" {
+            if fits {
+                match self.store_with(&key, &cached, |tmp| std::fs::copy(&f.path, tmp).map(|_| ()))
+                {
+                    Ok(()) => return Ok(Preview::File(cached)),
+                    Err(e) => tracing::warn!("preview cache write failed: {e:#}"),
+                }
+            }
+            return Ok(Preview::File(PathBuf::from(&f.path)));
+        }
+
+        let bytes = crate::formats::threemf::to_binary_stl(Path::new(&f.path))?;
+        if self.max_bytes > 0
+            && (bytes.len() as u64) <= self.max_bytes
+            && let Err(e) = self.store_with(&key, &cached, |tmp| std::fs::write(tmp, &bytes))
+        {
+            tracing::warn!("preview cache write failed: {e:#}");
+        }
+        Ok(Preview::Bytes(bytes))
+    }
+
+    /// Convenience for callers that want bytes regardless of source.
+    pub fn get_or_build(&self, id: i64, f: &FileRef) -> Result<Vec<u8>> {
+        if let Some(p) = self.cached(id, f) {
+            return Ok(std::fs::read(p)?);
+        }
+        match self.build(id, f)? {
+            Preview::File(p) => Ok(std::fs::read(p)?),
+            Preview::Bytes(b) => Ok(b),
+        }
+    }
+
+    fn store_with(
+        &self,
+        key: &str,
+        path: &Path,
+        write: impl FnOnce(&Path) -> std::io::Result<()>,
+    ) -> Result<()> {
         std::fs::create_dir_all(&self.dir)?;
         let tmp = self.dir.join(format!("{key}.tmp"));
-        std::fs::write(&tmp, bytes)?;
+        if let Err(e) = write(&tmp) {
+            let _ = std::fs::remove_file(&tmp);
+            return Err(e.into());
+        }
         std::fs::rename(&tmp, path)?;
         self.evict(key)?;
         Ok(())
