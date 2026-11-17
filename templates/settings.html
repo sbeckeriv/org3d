@@ -46,6 +46,25 @@ button[type="submit"]:hover { opacity: .85; }
 }
 .section-divider { border: none; border-top: 1px solid var(--border); margin: 1.75rem 0; }
 .htmx-indicator { display: none; }
+.scan-report { font-size: .85rem; line-height: 1.5; }
+.sr-line { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.sr-muted { color: var(--muted); }
+.sr-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.sr-ok { background: #80c080; } .sr-warn { background: #d9a35b; } .sr-bad { background: #d06a6a; }
+.sr-busy { background: var(--accent); animation: sr-pulse 1s ease-in-out infinite alternate; }
+@keyframes sr-pulse { from { opacity: .35; } to { opacity: 1; } }
+.sr-bar { height: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.sr-bar > div { height: 100%; background: var(--accent); transition: width .5s; }
+.sr-error, .sr-warning { border-radius: 6px; padding: .6rem .8rem; margin: .5rem 0; }
+.sr-error { background: rgba(208,106,106,.12); border: 1px solid #d06a6a; color: #f0b0b0; }
+.sr-warning { background: rgba(217,163,91,.10); border: 1px solid #d9a35b; color: #f0d0a0; }
+.sr-bad-text { color: #f0b0b0; }
+table.sr-stats { border-collapse: collapse; margin: .25rem 0 .5rem; width: 100%; }
+table.sr-stats th { text-align: left; font-weight: 400; color: var(--muted); padding: .2rem .75rem .2rem 0; white-space: nowrap; }
+table.sr-stats td { padding: .2rem 1.5rem .2rem 0; font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) { table.sr-stats th, table.sr-stats td { display: block; padding: 0; } table.sr-stats td { margin-bottom: .35rem; } }
+.sr-details { margin: .5rem 0; } .sr-details summary { cursor: pointer; color: #f0d0a0; }
+.sr-details ul { margin: .4rem 0 .4rem 1.2rem; font-size: .78rem; color: var(--muted); word-break: break-all; }
 table.runtime { width: 100%; border-collapse: collapse; font-size: .85rem; }
 table.runtime th { text-align: left; font-weight: 500; color: var(--muted); padding: .4rem 1rem .4rem 0; white-space: nowrap; vertical-align: top; }
 table.runtime td { padding: .4rem 0; word-break: break-all; }
@@ -138,6 +157,11 @@ table.runtime td { padding: .4rem 0; word-break: break-all; }
     <button type="submit">Save Settings</button>
   </form>
   {% endif %}
+
+  <hr class="section-divider">
+
+  <h2 id="last-scan">Last scan</h2>
+  <div hx-get="/api/scan/report" hx-trigger="load" hx-swap="outerHTML"></div>
 
   <hr class="section-divider">
 

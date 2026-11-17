@@ -24,6 +24,8 @@ use rusqlite::Connection;
 use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 
@@ -37,13 +39,29 @@ const MAX_MISSING_FRACTION: f64 = 0.25;
 /// …unless the absolute number is this small.
 const MISSING_GUARD_MIN: usize = 25;
 
-#[derive(Debug, Clone, Copy)]
+/// Live counters a UI can poll while a scan runs. `total` stays 0 while the
+/// folder walk is still in progress.
+#[derive(Debug, Default)]
+pub struct ScanProgress {
+    pub total: AtomicUsize,
+    pub done: AtomicUsize,
+}
+
+impl ScanProgress {
+    pub fn reset(&self) {
+        self.total.store(0, Ordering::Relaxed);
+        self.done.store(0, Ordering::Relaxed);
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct ScanOptions {
     /// Purge rows that have been missing for this many days. 0 = never purge.
     pub purge_missing_after_days: u32,
     /// Skip the "too many files vanished at once" guard. For when you really
     /// did delete a large part of the library.
     pub allow_mass_missing: bool,
+    pub progress: Option<Arc<ScanProgress>>,
 }
 
 impl Default for ScanOptions {
@@ -51,11 +69,15 @@ impl Default for ScanOptions {
         Self {
             purge_missing_after_days: 30,
             allow_mass_missing: false,
+            progress: None,
         }
     }
 }
 
-#[derive(Debug, Default, Clone, Copy)]
+/// Keep at most this many failed paths in the report (all are logged).
+const MAX_FAILED_LISTED: usize = 50;
+
+#[derive(Debug, Default, Clone, serde::Serialize)]
 pub struct ScanStats {
     /// 3MF/STL files found on disk.
     pub scanned: usize,
@@ -71,7 +93,20 @@ pub struct ScanStats {
     pub missing: usize,
     /// Rows deleted after being missing past the grace period.
     pub purged: usize,
+    /// Files that couldn't be parsed/indexed.
     pub errors: usize,
+    /// Directory entries the walk couldn't read (permissions, I/O errors).
+    pub walk_errors: usize,
+    /// First few files that failed, with the reason.
+    pub failed: Vec<String>,
+    /// Things the user should know about, e.g. a refused mass-missing.
+    pub warnings: Vec<String>,
+}
+
+impl ScanStats {
+    pub fn has_problems(&self) -> bool {
+        self.errors > 0 || self.walk_errors > 0 || !self.warnings.is_empty()
+    }
 }
 
 struct Found {
@@ -146,8 +181,12 @@ pub fn scan_with(
     let known = db::known_files(conn)?;
     let mut stats = ScanStats {
         scanned: found.len(),
+        walk_errors,
         ..Default::default()
     };
+    if let Some(p) = &opts.progress {
+        p.total.store(found.len(), Ordering::Relaxed);
+    }
 
     // Rows under this root whose path wasn't seen: either moved, or gone.
     let found_paths: HashSet<String> = found
@@ -175,6 +214,9 @@ pub fn scan_with(
     for (i, f) in found.iter().enumerate() {
         let key = f.path.to_string_lossy().into_owned();
         pb.inc(1);
+        if let Some(p) = &opts.progress {
+            p.done.store(i + 1, Ordering::Relaxed);
+        }
         if (i + 1) % LOG_EVERY == 0 && pb.is_hidden() {
             tracing::info!("scan progress: {}/{}", i + 1, found.len());
         }
@@ -214,6 +256,12 @@ pub fn scan_with(
             Err(e) => {
                 pb.suspend(|| tracing::warn!("index error {}: {e:#}", f.path.display()));
                 stats.errors += 1;
+                if stats.failed.len() < MAX_FAILED_LISTED {
+                    let shown = f.path.strip_prefix(root).unwrap_or(&f.path);
+                    stats
+                        .failed
+                        .push(format!("{}: {}", shown.display(), e.root_cause()));
+                }
             }
         }
 
@@ -237,33 +285,47 @@ pub fn scan_with(
         .count();
     if !newly_missing.is_empty() {
         let n = newly_missing.len();
-        if walk_errors > 0 {
-            tracing::warn!(
-                "{n} indexed files not found, but the walk had {walk_errors} errors — \
-                 leaving them alone (a disk may be offline)"
-            );
+        let refused = if walk_errors > 0 {
+            Some(format!(
+                "{n} indexed files were not found, but {walk_errors} folders/files couldn't be \
+                 read, so nothing was hidden. A disk may be offline or permissions may be wrong."
+            ))
         } else if found.is_empty() {
-            tracing::warn!(
-                "library folder is empty but {n} files are indexed — leaving them alone \
-                 (is the share mounted?)"
-            );
+            Some(format!(
+                "The library folder is empty but {n} files are indexed, so nothing was hidden. \
+                 Is the share mounted into the container?"
+            ))
         } else if !opts.allow_mass_missing
             && n > MISSING_GUARD_MIN
             && (n as f64) > indexed_here as f64 * MAX_MISSING_FRACTION
         {
-            tracing::warn!(
-                "{n} of {indexed_here} indexed files vanished at once — leaving them alone. \
-                 If an array disk is missing, bring it back and rescan; if you really \
-                 deleted them, run `org3d scan <path> --allow-mass-missing`."
-            );
+            Some(format!(
+                "{n} of {indexed_here} indexed files vanished at once, so nothing was hidden. \
+                 If an array disk is missing, bring it back and rescan. If you really deleted \
+                 them, run `org3d scan <path> --allow-mass-missing`."
+            ))
         } else {
-            conn.execute_batch("BEGIN")?;
-            for id in &newly_missing {
-                db::mark_missing(conn, *id)?;
+            None
+        };
+        match refused {
+            Some(msg) => {
+                tracing::warn!("{msg}");
+                stats.warnings.push(msg);
             }
-            conn.execute_batch("COMMIT")?;
-            stats.missing = n;
+            None => {
+                conn.execute_batch("BEGIN")?;
+                for id in &newly_missing {
+                    db::mark_missing(conn, *id)?;
+                }
+                conn.execute_batch("COMMIT")?;
+                stats.missing = n;
+            }
         }
+    }
+    if walk_errors > 0 && stats.warnings.is_empty() {
+        stats.warnings.push(format!(
+            "{walk_errors} folders/files couldn't be read during the walk (see the log)."
+        ));
     }
 
     // ── 4. Purge rows missing past the grace period ──────────────────────────

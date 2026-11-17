@@ -163,8 +163,15 @@ async fn main() -> Result<()> {
             let opts = scanner::ScanOptions {
                 purge_missing_after_days: purge_missing_days,
                 allow_mass_missing,
+                ..Default::default()
             };
-            scanner::scan_with(&conn, &path, &thumb_dir, &opts)?;
+            let stats = scanner::scan_with(&conn, &path, &thumb_dir, &opts)?;
+            for w in &stats.warnings {
+                eprintln!("warning: {w}");
+            }
+            for f in &stats.failed {
+                eprintln!("failed: {f}");
+            }
         }
 
         Cmd::Serve(opts) => {
@@ -232,14 +239,19 @@ async fn main() -> Result<()> {
             let results = extract::extract_all(&path)
                 .with_context(|| format!("extracting in {}", path.display()))?;
             let total: usize = results.iter().map(|r| r.files_extracted).sum();
-            println!("Extracted {} ZIPs, {} files total.", results.len(), total);
+            let done = results.iter().filter(|r| r.extracted()).count();
+            println!("Extracted {done} ZIPs, {total} files total.");
             for r in &results {
-                println!(
-                    "  {} → {} ({} files)",
-                    r.zip_path.display(),
-                    r.dest_dir.display(),
-                    r.files_extracted
-                );
+                match &r.error {
+                    Some(e) => println!("  {} FAILED: {e}", r.zip_path.display()),
+                    None if r.skipped => {}
+                    None => println!(
+                        "  {} → {} ({} files)",
+                        r.zip_path.display(),
+                        r.dest_dir.display(),
+                        r.files_extracted
+                    ),
+                }
             }
             if scan {
                 let conn = db::open(&cli.db)?;

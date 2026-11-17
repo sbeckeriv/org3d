@@ -1,0 +1,58 @@
+<div id="scan-report" class="scan-report" hx-get="/api/scan/report" hx-swap="outerHTML"
+     hx-trigger="{% if scanning %}every 2s{% else %}scan-started from:body{% endif %}">
+{% if scanning %}
+  <p class="sr-line"><span class="sr-dot sr-busy"></span>
+    {% if progress.total %}Scanning {{ progress.done }} / {{ progress.total }} files ({{ progress.percent }}%){% else %}Scanning — reading folders…{% endif %}
+  </p>
+  {% if progress.total %}<div class="sr-bar"><div style="width:{{ progress.percent }}%"></div></div>{% endif %}
+{% elif not report %}
+  <p class="sr-line sr-muted">No scan has run since the server started. The container log has earlier runs.</p>
+{% else %}
+  <p class="sr-line">
+    <span class="sr-dot {% if report.error %}sr-bad{% elif report.problems %}sr-warn{% else %}sr-ok{% endif %}"></span>
+    <strong>{{ report.kind }}</strong>
+    <span class="sr-muted">· {{ report.started }} · took {{ report.duration }}</span>
+  </p>
+
+  {% if report.error %}
+  <p class="sr-error">{{ report.error }}</p>
+  {% endif %}
+
+  {% if report.extract %}
+  <p class="sr-line">
+    {% if report.extract.extracted %}Extracted {{ report.extract.extracted }} ZIP{{ "s" if report.extract.extracted != 1 }} ({{ report.extract.files }} files).{% else %}No new ZIPs to extract.{% endif %}
+  </p>
+  {% endif %}
+
+  {% if report.stats %}
+  {% set s = report.stats %}
+  <table class="sr-stats">
+    <tr><th>Found</th><td>{{ s.scanned }}</td>
+        <th>Indexed (new/changed)</th><td>{{ s.inserted }}</td></tr>
+    <tr><th>Unchanged (not read)</th><td>{{ s.unchanged }}</td>
+        <th>Moved / renamed</th><td>{{ s.moved }}</td></tr>
+    <tr><th>Marked missing</th><td>{{ s.missing }}</td>
+        <th>Restored</th><td>{{ s.restored }}</td></tr>
+    <tr><th>Purged</th><td>{{ s.purged }}</td>
+        <th>Errors</th><td class="{{ 'sr-bad-text' if s.errors or s.walk_errors }}">{{ s.errors + s.walk_errors }}</td></tr>
+  </table>
+  {% for w in s.warnings %}
+  <p class="sr-warning">{{ w }}</p>
+  {% endfor %}
+  {% if s.failed %}
+  <details class="sr-details">
+    <summary>{{ s.errors }} file{{ "s" if s.errors != 1 }} couldn't be read{% if s.errors > s.failed|length %} (first {{ s.failed|length }} shown){% endif %}</summary>
+    <ul>{% for f in s.failed %}<li>{{ f }}</li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+  {% endif %}
+
+  {% if report.extract and report.extract.failed %}
+  <details class="sr-details" open>
+    <summary>{{ report.extract.failed|length }} ZIP{{ "s" if report.extract.failed|length != 1 }} couldn't be extracted</summary>
+    <ul>{% for f in report.extract.failed %}<li>{{ f }}</li>{% endfor %}</ul>
+    <p class="sr-muted">If this says "Read-only file system", the library is mounted read-only. Change the Library path to <code>rw</code> in the container template.</p>
+  </details>
+  {% endif %}
+{% endif %}
+</div>

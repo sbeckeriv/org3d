@@ -116,6 +116,8 @@ impl Application {
             preview_cache_bytes: cfg.preview_cache_bytes,
             purge_missing_days: cfg.purge_missing_days,
             scanning: AtomicBool::new(false),
+            progress: Arc::new(crate::scanner::ScanProgress::default()),
+            last_scan: Mutex::new(None),
             update_banner: Arc::new(Mutex::new(None)),
         });
         Ok(Application {
@@ -136,7 +138,7 @@ impl Application {
     /// Start a background scan of the library. Returns false if one is running
     /// or no library folder is configured. Must be called inside a Tokio runtime.
     pub fn start_scan(&self) -> bool {
-        start_scan(&self.state, false).is_ok()
+        start_scan(&self.state, ScanKind::Startup).is_ok()
     }
 
     pub async fn run(self) -> Result<()> {
@@ -185,7 +187,7 @@ async fn rescan_loop(state: SharedState, at: jiff::civil::Time) {
         };
         tracing::info!("next scheduled rescan at {next}");
         tokio::time::sleep(wait).await;
-        if let Err(msg) = start_scan(&state, false) {
+        if let Err(msg) = start_scan(&state, ScanKind::Scheduled) {
             tracing::info!("scheduled rescan skipped: {msg}");
         }
     }
@@ -208,6 +210,8 @@ pub struct AppState {
     pub preview_cache_bytes: u64,
     pub purge_missing_days: u32,
     pub scanning: AtomicBool,
+    progress: Arc<crate::scanner::ScanProgress>,
+    last_scan: Mutex<Option<ScanReport>>,
     pub update_banner: Arc<Mutex<Option<String>>>,
 }
 
@@ -240,6 +244,13 @@ impl AppState {
         self.mode == Mode::Desktop && cfg!(target_os = "macos")
     }
 
+    fn last_scan(&self) -> Option<ScanReport> {
+        self.last_scan
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .clone()
+    }
+
     fn render(&self, name: &str, ctx: Value) -> Response {
         match self.env.get_template(name).and_then(|t| t.render(ctx)) {
             Ok(html) => Html(html).into_response(),
@@ -251,7 +262,50 @@ impl AppState {
     }
 }
 
-/// Resets the scanning flag even if the scan panics.
+/// What started a scan; shown in the report.
+#[derive(Debug, Clone, Copy)]
+pub enum ScanKind {
+    Startup,
+    Manual,
+    Extract,
+    Scheduled,
+    FolderChanged,
+}
+
+impl ScanKind {
+    fn label(self) -> &'static str {
+        match self {
+            ScanKind::Startup => "Initial scan",
+            ScanKind::Manual => "Manual rescan",
+            ScanKind::Extract => "Extract ZIPs + scan",
+            ScanKind::Scheduled => "Scheduled rescan",
+            ScanKind::FolderChanged => "Rescan after folder change",
+        }
+    }
+}
+
+#[derive(Debug, Clone, Default, Serialize)]
+pub struct ExtractSummary {
+    pub extracted: usize,
+    pub files: usize,
+    pub failed: Vec<String>,
+}
+
+/// Outcome of the most recent scan, for the UI. Kept in memory only; the
+/// container log has the full history.
+#[derive(Debug, Clone, Serialize)]
+pub struct ScanReport {
+    pub kind: &'static str,
+    pub started: String,
+    pub duration: String,
+    /// The scan couldn't run or aborted (e.g. library folder not mounted).
+    pub error: Option<String>,
+    pub stats: Option<crate::scanner::ScanStats>,
+    pub extract: Option<ExtractSummary>,
+    pub problems: bool,
+}
+
+/// Resets the scanning flag even if the scan task panics.
 struct ScanGuard(SharedState);
 impl Drop for ScanGuard {
     fn drop(&mut self) {
@@ -259,7 +313,7 @@ impl Drop for ScanGuard {
     }
 }
 
-fn start_scan(state: &SharedState, extract_first: bool) -> Result<(), &'static str> {
+fn start_scan(state: &SharedState, kind: ScanKind) -> Result<(), &'static str> {
     let root = state.files_root();
     if root.is_empty() {
         return Err("No base folder configured.");
@@ -272,36 +326,116 @@ fn start_scan(state: &SharedState, extract_first: bool) -> Result<(), &'static s
         return Err("A scan is already in progress.");
     }
     let guard = ScanGuard(state.clone());
-    tokio::task::spawn_blocking(move || {
-        let st = &guard.0;
-        let root = std::path::Path::new(&root);
-        if extract_first {
-            match crate::extract::extract_all(root) {
-                Ok(results) => {
-                    let n = results.iter().filter(|r| !r.skipped).count();
-                    tracing::info!("extracted {n} new ZIPs");
-                    if n == 0 {
-                        return;
-                    }
-                }
-                Err(e) => {
-                    tracing::error!("extract failed: {e:#}");
-                    return;
-                }
-            }
-        }
-        let res = crate::db::open(&st.db_path).and_then(|conn| {
-            let opts = crate::scanner::ScanOptions {
-                purge_missing_after_days: st.purge_missing_days,
-                ..Default::default()
-            };
-            crate::scanner::scan_with(&conn, root, std::path::Path::new(&st.thumb_dir), &opts)
+    state.progress.reset();
+    tokio::spawn(async move {
+        let st = guard.0.clone();
+        let started = jiff::ZonedDateTime::now()
+            .strftime("%Y-%m-%d %H:%M")
+            .to_string();
+        let t0 = std::time::Instant::now();
+        let joined = tokio::task::spawn_blocking(move || run_scan(&st, &root, kind)).await;
+        let (extract, result) = joined.unwrap_or_else(|e| {
+            tracing::error!("scan task crashed: {e}");
+            (
+                None,
+                Err("The scan crashed; see the container log.".to_string()),
+            )
         });
-        if let Err(e) = res {
-            tracing::error!("scan failed: {e:#}");
-        }
+        let (stats, error) = match result {
+            Ok(s) => (s, None),
+            Err(e) => (None, Some(e)),
+        };
+        let problems = error.is_some()
+            || stats.as_ref().is_some_and(|s| s.has_problems())
+            || extract.as_ref().is_some_and(|x| !x.failed.is_empty());
+        let report = ScanReport {
+            kind: kind.label(),
+            started,
+            duration: format_duration(t0.elapsed()),
+            error,
+            stats,
+            extract,
+            problems,
+        };
+        // Publish the report before the guard clears `scanning`, so a poller
+        // that sees "not scanning" always sees this scan's result.
+        *guard.0.last_scan.lock().unwrap_or_else(|e| e.into_inner()) = Some(report);
+        drop(guard);
     });
     Ok(())
+}
+
+type ScanResult = (
+    Option<ExtractSummary>,
+    std::result::Result<Option<crate::scanner::ScanStats>, String>,
+);
+
+/// Blocking body of a scan. `Ok(None)` = nothing to do (no new ZIPs).
+fn run_scan(st: &AppState, root: &str, kind: ScanKind) -> ScanResult {
+    let root = std::path::Path::new(root);
+    let mut extract = None;
+    if matches!(kind, ScanKind::Extract) {
+        match crate::extract::extract_all(root) {
+            Ok(results) => {
+                let summary = ExtractSummary {
+                    extracted: results.iter().filter(|r| r.extracted()).count(),
+                    files: results.iter().map(|r| r.files_extracted).sum(),
+                    failed: results
+                        .iter()
+                        .filter_map(|r| {
+                            r.error
+                                .as_ref()
+                                .map(|e| format!("{}: {e}", rel(root, &r.zip_path)))
+                        })
+                        .collect(),
+                };
+                tracing::info!(
+                    "extracted {} new ZIPs, {} failed",
+                    summary.extracted,
+                    summary.failed.len()
+                );
+                let nothing_new = summary.extracted == 0;
+                extract = Some(summary);
+                if nothing_new {
+                    return (extract, Ok(None));
+                }
+            }
+            Err(e) => {
+                tracing::error!("extract failed: {e:#}");
+                return (None, Err(format!("Extract failed: {e:#}")));
+            }
+        }
+    }
+    let res = crate::db::open(&st.db_path).and_then(|conn| {
+        let opts = crate::scanner::ScanOptions {
+            purge_missing_after_days: st.purge_missing_days,
+            progress: Some(st.progress.clone()),
+            ..Default::default()
+        };
+        crate::scanner::scan_with(&conn, root, std::path::Path::new(&st.thumb_dir), &opts)
+    });
+    match res {
+        Ok(stats) => (extract, Ok(Some(stats))),
+        Err(e) => {
+            tracing::error!("scan failed: {e:#}");
+            (extract, Err(format!("{e:#}")))
+        }
+    }
+}
+
+/// Path relative to the library root, for display.
+fn rel(root: &std::path::Path, p: &std::path::Path) -> String {
+    p.strip_prefix(root).unwrap_or(p).display().to_string()
+}
+
+fn format_duration(d: std::time::Duration) -> String {
+    let s = d.as_secs();
+    match s {
+        0 => format!("{} ms", d.as_millis()),
+        1..60 => format!("{s}s"),
+        60..3600 => format!("{}m {}s", s / 60, s % 60),
+        _ => format!("{}h {}m", s / 3600, (s % 3600) / 60),
+    }
 }
 
 // ── Router ───────────────────────────────────────────────────────────────────
@@ -329,6 +463,14 @@ pub fn make_env() -> minijinja::Environment<'static> {
             include_str!("../templates/project_widget.html"),
         ),
         ("settings.html", include_str!("../templates/settings.html")),
+        (
+            "scan_status.html",
+            include_str!("../templates/scan_status.html"),
+        ),
+        (
+            "scan_report.html",
+            include_str!("../templates/scan_report.html"),
+        ),
     ] {
         env.add_template(name, src)
             .expect("built-in template parses");
@@ -345,6 +487,7 @@ pub fn make_router(state: SharedState) -> Router {
         .route("/settings", get(settings_page).post(save_settings))
         .route("/static/{name}", get(static_asset))
         .route("/api/scan/status", get(scan_status))
+        .route("/api/scan/report", get(scan_report))
         .route("/api/update/status", get(update_status_handler))
         .route("/search", get(search_results))
         .route("/model/{id}", get(model_detail))
@@ -855,7 +998,7 @@ async fn save_settings(
     };
     // Only rescan when the library actually moved; saving e.g. the slicer
     // preference shouldn't walk the whole library.
-    let scan_started = folder_changed && start_scan(&state, false).is_ok();
+    let scan_started = folder_changed && start_scan(&state, ScanKind::FolderChanged).is_ok();
     state.render(
         "settings.html",
         settings_ctx(&state, &settings, saved, scan_started),
@@ -898,24 +1041,29 @@ fn status_span(ok: bool, msg: &str) -> Html<String> {
     Html(format!(r#"<span style="color:{color}">{msg}</span>"#))
 }
 
-async fn rescan_handler(State(state): State<SharedState>) -> Html<String> {
-    match start_scan(&state, false) {
-        Ok(()) => status_span(
-            true,
-            r#"Scan started — check the <a href="/" style="color:inherit">Gallery</a> for progress."#,
-        ),
-        Err(msg) => status_span(false, msg),
+/// Respond to a scan button. On success, fire `scan-started` so the Last
+/// scan panel on the page starts polling.
+fn scan_started_response(state: &SharedState, kind: ScanKind, ok_msg: &str) -> Response {
+    match start_scan(state, kind) {
+        Ok(()) => ([("HX-Trigger", "scan-started")], status_span(true, ok_msg)).into_response(),
+        Err(msg) => status_span(false, msg).into_response(),
     }
 }
 
-async fn extract_handler(State(state): State<SharedState>) -> Html<String> {
-    match start_scan(&state, true) {
-        Ok(()) => status_span(
-            true,
-            r#"Extracting ZIPs and scanning — check the <a href="/" style="color:inherit">Gallery</a> for progress."#,
-        ),
-        Err(msg) => status_span(false, msg),
-    }
+async fn rescan_handler(State(state): State<SharedState>) -> Response {
+    scan_started_response(
+        &state,
+        ScanKind::Manual,
+        "Scan started — progress is shown below.",
+    )
+}
+
+async fn extract_handler(State(state): State<SharedState>) -> Response {
+    scan_started_response(
+        &state,
+        ScanKind::Extract,
+        "Extracting ZIPs, then scanning — progress is shown below.",
+    )
 }
 
 async fn autogroup_handler(State(state): State<SharedState>) -> Html<String> {
@@ -942,17 +1090,41 @@ async fn autogroup_handler(State(state): State<SharedState>) -> Html<String> {
     }
 }
 
-async fn scan_status(State(state): State<SharedState>) -> Html<String> {
-    let is_scanning = state.scanning.load(Ordering::Acquire);
+fn progress_ctx(state: &AppState) -> Value {
+    let total = state.progress.total.load(Ordering::Relaxed);
+    let done = state.progress.done.load(Ordering::Relaxed);
+    minijinja::context! {
+        total,
+        done,
+        percent => (done * 100).checked_div(total).unwrap_or(0),
+    }
+}
+
+/// Gallery header: model count, scan progress, and a pointer to the Last scan
+/// panel when the previous scan had problems.
+async fn scan_status(State(state): State<SharedState>) -> Response {
     let count = log_err("count", db::count(&state.db()));
-    if is_scanning {
-        Html(format!(
-            r#"<span id="scan-status" class="count" hx-get="/api/scan/status" hx-trigger="every 1s" hx-swap="outerHTML"><span class="spinner"></span> {count} models</span>"#
-        ))
-    } else {
-        Html(format!(
-            r#"<span id="scan-status" class="count">{count} models</span>"#
-        ))
+    state.render(
+        "scan_status.html",
+        minijinja::context! {
+            count,
+            scanning => state.scanning.load(Ordering::Acquire),
+            progress => progress_ctx(&state),
+            last => state.last_scan().map(|r| Value::from(Serde(r))),
+        },
+    )
+}
+
+/// Settings page "Last scan" panel. Polls itself while a scan runs.
+async fn scan_report(State(state): State<SharedState>) -> Response {
+    state.render("scan_report.html", scan_report_ctx(&state))
+}
+
+fn scan_report_ctx(state: &AppState) -> Value {
+    minijinja::context! {
+        scanning => state.scanning.load(Ordering::Acquire),
+        progress => progress_ctx(state),
+        report => state.last_scan().map(|r| Value::from(Serde(r))),
     }
 }
 
