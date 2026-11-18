@@ -10,7 +10,8 @@ pub struct TestApp {
     /// Empty per-test library folder the app scans.
     #[allow(dead_code)]
     pub library: PathBuf,
-    db_path: PathBuf,
+    #[allow(dead_code)]
+    pub db_path: PathBuf,
     scratch: Vec<PathBuf>,
 }
 

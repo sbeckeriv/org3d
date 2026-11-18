@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod autogroup;
 pub mod db;
+pub mod dupes;
 pub mod extract;
 pub mod formats;
 pub mod preview;

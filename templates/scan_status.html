@@ -1,7 +1,7 @@
 {% if scanning %}
 <span id="scan-status" class="count" hx-get="/api/scan/status" hx-trigger="every 1s" hx-swap="outerHTML">
   <span class="spinner"></span>
-  {% if progress.total %}Scanning {{ progress.done }} / {{ progress.total }}{% else %}Scanning — reading folders…{% endif %}
+  {% if progress.total %}{{ progress.verb }} {{ progress.done }} / {{ progress.total }}{% else %}Scanning — reading folders…{% endif %}
   · {{ count }} models
 </span>
 {% else %}

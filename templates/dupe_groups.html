@@ -1,0 +1,50 @@
+<div id="dupe-groups" hx-get="/api/duplicates" hx-trigger="scan-finished from:body" hx-swap="outerHTML">
+{% if message %}
+<div class="notice {{ 'notice-ok' if message.ok else 'notice-bad' }}">
+  {{ message.text }}
+  {% if message.details %}<ul>{% for d in message.details %}<li>{{ d }}</li>{% endfor %}</ul>{% endif %}
+</div>
+{% endif %}
+
+{% if groups %}
+<p class="summary">
+  <strong>{{ group_count }}</strong> file{{ "s" if group_count != 1 }} with copies ·
+  <strong>{{ extra_copies }}</strong> extra cop{{ "ies" if extra_copies != 1 else "y" }} ·
+  <strong>{{ wasted }}</strong> reclaimable
+</p>
+{% endif %}
+{% if unhashed %}
+<p class="intro">{{ unhashed }} file{{ "s" if unhashed != 1 }} of matching size {{ "haven't" if unhashed != 1 else "hasn't" }} been compared yet. Click <strong>Find duplicates</strong> to check {{ "them" if unhashed != 1 else "it" }}.</p>
+{% endif %}
+
+{% if groups %}
+<form hx-post="/api/duplicates/trash" hx-target="#dupe-groups" hx-swap="outerHTML"
+      hx-confirm="Move the checked files to {{ trash_dir }} in the library?">
+  {% for g in groups %}
+  <div class="group">
+    {% if g.thumb %}<img src="{{ g.thumb }}" alt="" loading="lazy">{% else %}<div class="noimg"></div>{% endif %}
+    <div class="group-body">
+      <div class="group-head">{{ g.title }} <span>· {{ g.files|length }} copies · {{ g.size }} each</span></div>
+      {% for f in g.files %}
+      <label class="copy{% if not f.keep %} doomed{% endif %}">
+        <input type="checkbox" name="id" value="{{ f.id }}"{% if not f.keep %} checked{% endif %}>
+        <span class="copy-path"><span class="dir">{{ f.folder }}/</span>{{ f.filename }}
+          {% if f.keep %}<span class="tag tag-keep">keep</span>{% endif %}
+          {% if f.project_name %}<span class="tag tag-proj">{{ f.project_name }}</span>{% endif %}
+        </span>
+        {% if f.date %}<span class="copy-meta">{{ f.date }}</span>{% endif %}
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+  {% endfor %}
+  {% if hidden_groups %}<p class="intro">{{ hidden_groups }} more group{{ "s" if hidden_groups != 1 }} not shown; they appear after you clear these.</p>{% endif %}
+  <div class="sticky">
+    <button class="btn btn-danger" type="submit"{% if scanning %} disabled title="Wait for the scan to finish"{% endif %}>Move checked to trash</button>
+    <span class="sr-muted">Checked copies are moved; unchecked ones stay. Every group keeps at least one copy.</span>
+  </div>
+</form>
+{% elif not unhashed %}
+<p class="empty">No duplicates found. Click <strong>Find duplicates</strong> after adding files.</p>
+{% endif %}
+</div>

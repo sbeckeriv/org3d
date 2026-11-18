@@ -25,7 +25,7 @@ use std::collections::{HashMap, HashSet};
 use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::UNIX_EPOCH;
 use walkdir::WalkDir;
 
@@ -45,12 +45,15 @@ const MISSING_GUARD_MIN: usize = 25;
 pub struct ScanProgress {
     pub total: AtomicUsize,
     pub done: AtomicUsize,
+    /// Set while comparing file contents for duplicates.
+    pub hashing: AtomicBool,
 }
 
 impl ScanProgress {
     pub fn reset(&self) {
         self.total.store(0, Ordering::Relaxed);
         self.done.store(0, Ordering::Relaxed);
+        self.hashing.store(false, Ordering::Relaxed);
     }
 }
 
@@ -136,7 +139,10 @@ pub fn scan_with(
     // ── 1. Walk: metadata only, never opens files ────────────────────────────
     let mut walk_errors = 0usize;
     let mut found = Vec::new();
-    for entry in WalkDir::new(root) {
+    for entry in WalkDir::new(root)
+        .into_iter()
+        .filter_entry(crate::dupes::walk_filter)
+    {
         let entry = match entry {
             Ok(e) => e,
             Err(e) => {
@@ -391,7 +397,7 @@ fn progress_bar(len: u64) -> ProgressBar {
 }
 
 /// Delete a thumbnail we generated. Only touches files inside `thumb_dir`.
-fn remove_thumbnail(thumb_dir: &Path, url: Option<&str>) {
+pub(crate) fn remove_thumbnail(thumb_dir: &Path, url: Option<&str>) {
     let Some(name) = url.and_then(|u| u.strip_prefix("/thumbs/")) else {
         return;
     };

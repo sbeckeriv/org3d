@@ -1,8 +1,8 @@
-<div id="scan-report" class="scan-report" hx-get="/api/scan/report" hx-swap="outerHTML"
+<div id="scan-report" class="scan-report" hx-get="/api/scan/report{% if scanning %}?poll=1{% endif %}" hx-swap="outerHTML"
      hx-trigger="{% if scanning %}every 2s{% else %}scan-started from:body{% endif %}">
 {% if scanning %}
   <p class="sr-line"><span class="sr-dot sr-busy"></span>
-    {% if progress.total %}Scanning {{ progress.done }} / {{ progress.total }} files ({{ progress.percent }}%){% else %}Scanning — reading folders…{% endif %}
+    {% if progress.total %}{{ progress.verb }} {{ progress.done }} / {{ progress.total }} files ({{ progress.percent }}%){% else %}Scanning — reading folders…{% endif %}
   </p>
   {% if progress.total %}<div class="sr-bar"><div style="width:{{ progress.percent }}%"></div></div>{% endif %}
 {% elif not report %}
@@ -43,6 +43,20 @@
   <details class="sr-details">
     <summary>{{ s.errors }} file{{ "s" if s.errors != 1 }} couldn't be read{% if s.errors > s.failed|length %} (first {{ s.failed|length }} shown){% endif %}</summary>
     <ul>{% for f in s.failed %}<li>{{ f }}</li>{% endfor %}</ul>
+  </details>
+  {% endif %}
+  {% endif %}
+
+  {% if report.dupes %}
+  {% set d = report.dupes %}
+  <p class="sr-line">
+    Compared {{ d.candidates }} same-size file{{ "s" if d.candidates != 1 }}: read {{ d.hashed }}, {{ d.cached }} already known{% if d.stale %}, {{ d.stale }} changed during the run{% endif %}.
+    {% if d.groups %}<a href="/duplicates" style="color:inherit">{{ d.extra_copies }} extra cop{{ "ies" if d.extra_copies != 1 else "y" }} in {{ d.groups }} group{{ "s" if d.groups != 1 }}.</a>{% else %}No duplicates.{% endif %}
+  </p>
+  {% if d.failed %}
+  <details class="sr-details">
+    <summary>{{ d.errors }} file{{ "s" if d.errors != 1 }} couldn't be read for comparison</summary>
+    <ul>{% for f in d.failed %}<li>{{ f }}</li>{% endfor %}</ul>
   </details>
   {% endif %}
   {% endif %}

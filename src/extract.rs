@@ -24,6 +24,7 @@ impl ExtractResult {
 pub fn extract_all(root: &Path) -> Result<Vec<ExtractResult>> {
     let zips: Vec<PathBuf> = WalkDir::new(root)
         .into_iter()
+        .filter_entry(crate::dupes::walk_filter)
         .filter_map(|e| e.ok())
         .filter(|e| {
             e.file_type().is_file()
