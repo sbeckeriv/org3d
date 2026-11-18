@@ -124,7 +124,10 @@ fn extract_one(zip_path: &Path, dest: &Path) -> Result<usize> {
             .filter(|part| !part.is_empty() && *part != "..")
             .collect();
 
-        if safe_name.as_os_str().is_empty() {
+        // Skip empty names and macOS junk (`__MACOSX/`, `._*`, `.DS_Store`).
+        if safe_name.as_os_str().is_empty()
+            || crate::dupes::is_ignored_path(Path::new(""), &safe_name)
+        {
             continue;
         }
 
