@@ -17,6 +17,7 @@ A local gallery and organiser for 3D print files. Scans a directory of 3MF and S
 - **Rescan** — re-index after adding new files, triggered from the Settings page or on startup
 - **Autogroup** — automatically creates projects from shared folder names
 - **Extract** — unpacks ZIP archives and re-scans in one step
+- **Duplicates** — finds byte-identical copies and moves the ones you pick to `.org3d-trash` in the library; the kept copy takes over the project and thumbnail
 - **Rename** — renames files to `Designer - Title.3mf` based on embedded metadata (CLI, dry-run by default)
 
 ## Install
@@ -63,13 +64,14 @@ docker run -d --name org3d -p 3000:3000 -e TZ=America/Los_Angeles \
 - A rescan reads only directory metadata (size and mtime) and opens only new or changed files. Install the **Dynamix Cache Directories** plugin to keep the library's directories in RAM. A rescan of an unchanged library then wakes no disks at all.
 - Database, thumbnails and the 3D preview cache live in `/config`. Put it on the cache pool. Viewing a model a second time is served from the cache, so its disk stays asleep. Browser revalidation uses ETags taken from the DB.
 - Downloading a file, or opening a model's 3D preview for the first time, wakes the disk that holds it.
+- **Find duplicates** reads only files that share an exact size with another file, and remembers each result, so later runs read only new or changed files. The first run may wake several disks.
 - Moved or renamed files keep their project, matched by size and mtime. Files that vanish are hidden, not deleted, so a disk that drops out of the array doesn't lose your projects. A scan that would hide more than 25% of the library at once is refused. Hidden rows are purged after `ORG3D_PURGE_MISSING_DAYS` (default 30).
 
 **Security.**
 
 - **Login.** Set `ORG3D_AUTH=user:password` to require a login for everything except the health check. Without it, anyone who can reach the port can rescan, extract into the library and change projects; the server logs a warning at startup. Basic auth over plain HTTP can be sniffed on your LAN, so use a password you don't use elsewhere. For access from outside the LAN, use a reverse proxy with TLS. Failed logins are logged and delayed by a second.
 - **Cross-site requests.** Cross-site POSTs are rejected.
-- **Container.** The image runs as 99:100 (nobody:users) and only writes to `/config` (and `/library` for **Extract ZIPs**), so it works with `--read-only`, `--cap-drop ALL` and `no-new-privileges`. The Unraid template sets these, plus a 2 GB memory cap. Mount `/library` read-only unless you use **Extract ZIPs**.
+- **Container.** The image runs as 99:100 (nobody:users) and only writes to `/config` (and `/library` for **Extract ZIPs** and **Duplicates**), so it works with `--read-only`, `--cap-drop ALL` and `no-new-privileges`. The Unraid template sets these, plus a 2 GB memory cap. Mount `/library` read-only unless you use **Extract ZIPs** or **Duplicates**.
 - **Untrusted files.** Large models are parsed and previewed with constant memory where possible; at most 2 3MF previews are converted at once. ZIP and 3MF entries are capped (1 GiB per 3MF part, 8 GiB per extracted file, 32 GiB per archive) and anything compressed more than 200× is rejected as a likely zip bomb.
 
 | Variable | Default (image) | |

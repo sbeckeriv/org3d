@@ -293,6 +293,8 @@ pub enum ScanKind {
     Extract,
     Scheduled,
     FolderChanged,
+    /// Incremental scan, then compare same-size files.
+    Duplicates,
 }
 
 impl ScanKind {
@@ -303,6 +305,7 @@ impl ScanKind {
             ScanKind::Extract => "Extract ZIPs + scan",
             ScanKind::Scheduled => "Scheduled rescan",
             ScanKind::FolderChanged => "Rescan after folder change",
+            ScanKind::Duplicates => "Find duplicates",
         }
     }
 }
@@ -325,6 +328,7 @@ pub struct ScanReport {
     pub error: Option<String>,
     pub stats: Option<crate::scanner::ScanStats>,
     pub extract: Option<ExtractSummary>,
+    pub dupes: Option<crate::dupes::HashStats>,
     pub problems: bool,
 }
 
@@ -357,12 +361,13 @@ fn start_scan(state: &SharedState, kind: ScanKind) -> Result<(), &'static str> {
             .to_string();
         let t0 = std::time::Instant::now();
         let joined = tokio::task::spawn_blocking(move || run_scan(&st, &root, kind)).await;
-        let (extract, result) = joined.unwrap_or_else(|e| {
+        let JobOutput {
+            extract,
+            result,
+            dupes,
+        } = joined.unwrap_or_else(|e| {
             tracing::error!("scan task crashed: {e}");
-            (
-                None,
-                Err("The scan crashed; see the container log.".to_string()),
-            )
+            JobOutput::failed(None, "The scan crashed; see the container log.".to_string())
         });
         let (stats, error) = match result {
             Ok(s) => (s, None),
@@ -370,7 +375,8 @@ fn start_scan(state: &SharedState, kind: ScanKind) -> Result<(), &'static str> {
         };
         let problems = error.is_some()
             || stats.as_ref().is_some_and(|s| s.has_problems())
-            || extract.as_ref().is_some_and(|x| !x.failed.is_empty());
+            || extract.as_ref().is_some_and(|x| !x.failed.is_empty())
+            || dupes.as_ref().is_some_and(|d| d.errors > 0);
         let report = ScanReport {
             kind: kind.label(),
             started,
@@ -378,6 +384,7 @@ fn start_scan(state: &SharedState, kind: ScanKind) -> Result<(), &'static str> {
             error,
             stats,
             extract,
+            dupes,
             problems,
         };
         // Publish the report before the guard clears `scanning`, so a poller
@@ -388,13 +395,25 @@ fn start_scan(state: &SharedState, kind: ScanKind) -> Result<(), &'static str> {
     Ok(())
 }
 
-type ScanResult = (
-    Option<ExtractSummary>,
-    std::result::Result<Option<crate::scanner::ScanStats>, String>,
-);
+struct JobOutput {
+    extract: Option<ExtractSummary>,
+    /// `Ok(None)` = nothing to do (no new ZIPs).
+    result: std::result::Result<Option<crate::scanner::ScanStats>, String>,
+    dupes: Option<crate::dupes::HashStats>,
+}
 
-/// Blocking body of a scan. `Ok(None)` = nothing to do (no new ZIPs).
-fn run_scan(st: &AppState, root: &str, kind: ScanKind) -> ScanResult {
+impl JobOutput {
+    fn failed(extract: Option<ExtractSummary>, msg: String) -> Self {
+        Self {
+            extract,
+            result: Err(msg),
+            dupes: None,
+        }
+    }
+}
+
+/// Blocking body of a scan job.
+fn run_scan(st: &AppState, root: &str, kind: ScanKind) -> JobOutput {
     let root = std::path::Path::new(root);
     let mut extract = None;
     if matches!(kind, ScanKind::Extract) {
@@ -420,30 +439,54 @@ fn run_scan(st: &AppState, root: &str, kind: ScanKind) -> ScanResult {
                 let nothing_new = summary.extracted == 0;
                 extract = Some(summary);
                 if nothing_new {
-                    return (extract, Ok(None));
+                    return JobOutput {
+                        extract,
+                        result: Ok(None),
+                        dupes: None,
+                    };
                 }
             }
             Err(e) => {
                 tracing::error!("extract failed: {e:#}");
-                return (None, Err(format!("Extract failed: {e:#}")));
+                return JobOutput::failed(None, format!("Extract failed: {e:#}"));
             }
         }
     }
-    let res = crate::db::open(&st.db_path).and_then(|conn| {
-        let opts = crate::scanner::ScanOptions {
-            purge_missing_after_days: st.purge_missing_days,
-            progress: Some(st.progress.clone()),
-            ..Default::default()
-        };
-        crate::scanner::scan_with(&conn, root, std::path::Path::new(&st.thumb_dir), &opts)
-    });
-    match res {
-        Ok(stats) => (extract, Ok(Some(stats))),
+    let conn = match crate::db::open(&st.db_path) {
+        Ok(c) => c,
         Err(e) => {
             tracing::error!("scan failed: {e:#}");
-            (extract, Err(format!("{e:#}")))
+            return JobOutput::failed(extract, format!("{e:#}"));
+        }
+    };
+    let opts = crate::scanner::ScanOptions {
+        purge_missing_after_days: st.purge_missing_days,
+        progress: Some(st.progress.clone()),
+        ..Default::default()
+    };
+    let stats =
+        match crate::scanner::scan_with(&conn, root, std::path::Path::new(&st.thumb_dir), &opts) {
+            Ok(s) => s,
+            Err(e) => {
+                tracing::error!("scan failed: {e:#}");
+                return JobOutput::failed(extract, format!("{e:#}"));
+            }
+        };
+    let mut out = JobOutput {
+        extract,
+        result: Ok(Some(stats)),
+        dupes: None,
+    };
+    if matches!(kind, ScanKind::Duplicates) {
+        match crate::dupes::hash_candidates(&conn, root, Some(&st.progress)) {
+            Ok(d) => out.dupes = Some(d),
+            Err(e) => {
+                tracing::error!("duplicate check failed: {e:#}");
+                out.result = Err(format!("Duplicate check failed: {e:#}"));
+            }
         }
     }
+    out
 }
 
 /// Path relative to the library root, for display.
@@ -494,6 +537,14 @@ pub fn make_env() -> minijinja::Environment<'static> {
             "scan_report.html",
             include_str!("../templates/scan_report.html"),
         ),
+        (
+            "duplicates.html",
+            include_str!("../templates/duplicates.html"),
+        ),
+        (
+            "dupe_groups.html",
+            include_str!("../templates/dupe_groups.html"),
+        ),
     ] {
         env.add_template(name, src)
             .expect("built-in template parses");
@@ -519,6 +570,10 @@ pub fn make_router(state: SharedState) -> Router {
         .route("/api/autogroup", post(autogroup_handler))
         .route("/api/rescan", post(rescan_handler))
         .route("/api/extract", post(extract_handler))
+        .route("/duplicates", get(duplicates_page))
+        .route("/api/duplicates", get(dupe_groups_handler))
+        .route("/api/duplicates/scan", post(find_duplicates_handler))
+        .route("/api/duplicates/trash", post(trash_duplicates_handler))
         .route("/api/model/{id}/thumbnail", post(upload_thumbnail))
         .route("/api/model/{id}/open/{app}", post(open_in_slicer))
         .route("/api/model/{id}/project", post(set_project))
@@ -1165,6 +1220,7 @@ fn progress_ctx(state: &AppState) -> Value {
         total,
         done,
         percent => (done * 100).checked_div(total).unwrap_or(0),
+        verb => if state.progress.hashing.load(Ordering::Relaxed) { "Comparing" } else { "Scanning" },
     }
 }
 
@@ -1184,8 +1240,19 @@ async fn scan_status(State(state): State<SharedState>) -> Response {
 }
 
 /// Settings page "Last scan" panel. Polls itself while a scan runs.
-async fn scan_report(State(state): State<SharedState>) -> Response {
-    state.render("scan_report.html", scan_report_ctx(&state))
+#[derive(Deserialize)]
+struct ReportQuery {
+    poll: Option<u8>,
+}
+
+async fn scan_report(State(state): State<SharedState>, Query(q): Query<ReportQuery>) -> Response {
+    let resp = state.render("scan_report.html", scan_report_ctx(&state));
+    // The panel was polling and the job just ended: let the page refresh
+    // anything that depends on it (e.g. the duplicate list).
+    if q.poll.is_some() && !state.scanning.load(Ordering::Acquire) {
+        return ([("HX-Trigger", "scan-finished")], resp).into_response();
+    }
+    resp
 }
 
 fn scan_report_ctx(state: &AppState) -> Value {
@@ -1254,4 +1321,200 @@ impl From<&ModelRow> for ModelCtx {
             folder: m.folder.clone(),
         }
     }
+}
+
+// ── Duplicates ───────────────────────────────────────────────────────────────
+
+/// Show at most this many groups; the rest appear after trashing some.
+const MAX_GROUPS_SHOWN: usize = 300;
+
+#[derive(Serialize)]
+struct DupeFileView {
+    id: i64,
+    folder: String,
+    filename: String,
+    date: Option<String>,
+    project_name: Option<String>,
+    keep: bool,
+}
+
+#[derive(Serialize)]
+struct DupeGroupView {
+    title: String,
+    thumb: Option<String>,
+    size: String,
+    wasted: String,
+    files: Vec<DupeFileView>,
+}
+
+fn human_bytes(n: i64) -> String {
+    const UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
+    let mut v = n.max(0) as f64;
+    let mut u = 0;
+    while v >= 1024.0 && u < UNITS.len() - 1 {
+        v /= 1024.0;
+        u += 1;
+    }
+    if u == 0 {
+        format!("{n} B")
+    } else {
+        format!("{v:.1} {}", UNITS[u])
+    }
+}
+
+fn date_of(secs: Option<i64>) -> Option<String> {
+    let ts = jiff::Timestamp::from_second(secs?).ok()?;
+    Some(ts.strftime("%Y-%m-%d").to_string())
+}
+
+fn dupe_groups_ctx(state: &AppState, message: Option<Value>) -> Value {
+    let root = state.files_root();
+    let root = std::path::Path::new(&root);
+    let (groups, unhashed) = {
+        let conn = state.db();
+        (
+            log_err("duplicate groups", crate::dupes::groups(&conn)),
+            log_err(
+                "unhashed candidates",
+                crate::dupes::unhashed_candidates(&conn),
+            ),
+        )
+    };
+    let extra: usize = groups.iter().map(|g| g.files.len() - 1).sum();
+    let wasted: i64 = groups.iter().map(|g| g.wasted_bytes()).sum();
+    let views: Vec<DupeGroupView> = groups
+        .iter()
+        .take(MAX_GROUPS_SHOWN)
+        .map(|g| DupeGroupView {
+            title: g
+                .files
+                .iter()
+                .find_map(|f| f.title.clone())
+                .unwrap_or_else(|| g.files[0].filename.clone()),
+            thumb: g.files.iter().find_map(|f| f.thumbnail_path.clone()),
+            size: human_bytes(g.file_size),
+            wasted: human_bytes(g.wasted_bytes()),
+            files: g
+                .files
+                .iter()
+                .map(|f| {
+                    let p = std::path::Path::new(&f.path);
+                    let folder = p
+                        .parent()
+                        .map(|d| rel(root, d))
+                        .filter(|s| !s.is_empty())
+                        .unwrap_or_else(|| ".".into());
+                    DupeFileView {
+                        id: f.id,
+                        folder,
+                        filename: f.filename.clone(),
+                        date: date_of(f.mtime),
+                        project_name: f.project_name.clone(),
+                        keep: f.keep,
+                    }
+                })
+                .collect(),
+        })
+        .collect();
+    minijinja::context! {
+        groups => Value::from(Serde(&views)),
+        group_count => groups.len(),
+        hidden_groups => groups.len().saturating_sub(MAX_GROUPS_SHOWN),
+        extra_copies => extra,
+        wasted => human_bytes(wasted),
+        unhashed,
+        scanning => state.scanning.load(Ordering::Acquire),
+        trash_dir => crate::dupes::TRASH_DIR,
+        message,
+    }
+}
+
+async fn duplicates_page(State(state): State<SharedState>) -> Response {
+    let ctx = minijinja::context! {
+        scan => scan_report_ctx(&state),
+        ..dupe_groups_ctx(&state, None)
+    };
+    state.render("duplicates.html", ctx)
+}
+
+async fn dupe_groups_handler(State(state): State<SharedState>) -> Response {
+    state.render("dupe_groups.html", dupe_groups_ctx(&state, None))
+}
+
+async fn find_duplicates_handler(State(state): State<SharedState>) -> Response {
+    scan_started_response(
+        &state,
+        ScanKind::Duplicates,
+        "Scanning, then comparing files of the same size — progress is shown below.",
+    )
+}
+
+/// Selected copies arrive as repeated `id=` form fields.
+fn parse_ids(body: &str) -> Vec<i64> {
+    body.split('&')
+        .filter_map(|kv| kv.split_once('='))
+        .filter(|(k, _)| *k == "id")
+        .filter_map(|(_, v)| v.parse().ok())
+        .collect()
+}
+
+async fn trash_duplicates_handler(State(state): State<SharedState>, body: String) -> Response {
+    let ids = parse_ids(&body);
+    let message = |ok: bool, text: String, details: Vec<String>| {
+        Some(minijinja::context! { ok, text, details })
+    };
+    let msg = if ids.is_empty() {
+        message(false, "Nothing selected.".into(), vec![])
+    } else if state
+        .scanning
+        .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+        .is_err()
+    {
+        message(
+            false,
+            "A scan is running; try again when it finishes.".into(),
+            vec![],
+        )
+    } else {
+        // Holding `scanning` keeps a scan from racing the file moves.
+        let guard = ScanGuard(state.clone());
+        let st = state.clone();
+        let res = tokio::task::spawn_blocking(move || {
+            let root = st.files_root();
+            let conn = crate::db::open(&st.db_path)?;
+            crate::dupes::trash(
+                &conn,
+                std::path::Path::new(&root),
+                std::path::Path::new(&st.thumb_dir),
+                &ids,
+            )
+        })
+        .await;
+        drop(guard);
+        match res {
+            Ok(Ok(o)) => {
+                let ok = o.failed.is_empty();
+                let mut text = format!(
+                    "Moved {} file{} ({}) to {} in the library.",
+                    o.moved,
+                    if o.moved == 1 { "" } else { "s" },
+                    human_bytes(o.freed_bytes),
+                    crate::dupes::TRASH_DIR,
+                );
+                if !ok {
+                    text.push_str(&format!(" {} couldn't be moved:", o.failed.len()));
+                }
+                message(ok, text, o.failed)
+            }
+            Ok(Err(e)) => {
+                tracing::error!("trash duplicates: {e:#}");
+                message(false, format!("Failed: {e:#}"), vec![])
+            }
+            Err(e) => {
+                tracing::error!("trash duplicates crashed: {e}");
+                message(false, "Failed; see the server log.".into(), vec![])
+            }
+        }
+    };
+    state.render("dupe_groups.html", dupe_groups_ctx(&state, msg))
 }

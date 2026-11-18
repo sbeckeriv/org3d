@@ -99,6 +99,13 @@ pub(crate) fn migrate(conn: &Connection) -> Result<()> {
     // project and thumbnail) so a disk that drops out of the array, or a file
     // that comes back, doesn't lose curation. Purged after a grace period.
     let _ = conn.execute("ALTER TABLE models ADD COLUMN missing_since TEXT", []);
+    // blake3 of the file contents, filled in by "Find duplicates" for files
+    // that share a size with another file. Cleared whenever the file changes.
+    let _ = conn.execute("ALTER TABLE models ADD COLUMN content_hash TEXT", []);
+    conn.execute_batch(
+        "CREATE INDEX IF NOT EXISTS models_content_hash ON models(content_hash);
+         CREATE INDEX IF NOT EXISTS models_file_size ON models(file_size);",
+    )?;
 
     // If the FTS table predates project_name, drop and rebuild it cleanly.
     let fts_sql: String = conn
@@ -211,6 +218,7 @@ pub fn upsert(conn: &Connection, m: &ModelRow) -> Result<i64> {
            dim_y=excluded.dim_y, dim_z=excluded.dim_z,
            thumbnail_path=COALESCE(excluded.thumbnail_path, thumbnail_path),
            mtime=excluded.mtime,
+           content_hash=NULL,
            missing_since=NULL,
            indexed_at=datetime('now')
          RETURNING id",

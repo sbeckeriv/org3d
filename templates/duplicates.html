@@ -1,0 +1,110 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>org3d — Duplicates</title>
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<script src="/static/htmx-2.0.3.min.js"></script>
+<style>
+:root {
+  --bg: #0f0f13; --surface: #1a1a22; --border: #2a2a38;
+  --accent: #6c63ff; --text: #e0e0f0; --muted: #888;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { background: var(--bg); color: var(--text); font-family: system-ui, sans-serif; }
+header { padding: .75rem 1.5rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap; }
+header h1 { font-size: 1.1rem; color: var(--accent); letter-spacing: 2px; font-weight: 700; }
+header a { color: var(--muted); text-decoration: none; font-size: .85rem; }
+header a:hover { color: var(--text); }
+.page { max-width: 860px; margin: 2rem auto; padding: 0 1rem 4rem; }
+h2 { font-size: 1rem; font-weight: 600; margin-bottom: 1rem; color: var(--muted); letter-spacing: .05em; text-transform: uppercase; }
+.intro { font-size: .85rem; color: var(--muted); line-height: 1.5; margin-bottom: 1rem; }
+.intro code { color: var(--text); }
+.actions { display: flex; align-items: center; gap: .75rem; flex-wrap: wrap; margin-bottom: 1rem; font-size: .85rem; }
+.btn { background: var(--accent); color: #fff; border: none; padding: .55rem 1.25rem; border-radius: 6px; font-size: .9rem; font-weight: 500; cursor: pointer; }
+.btn:hover { opacity: .85; }
+.btn:disabled { opacity: .4; cursor: default; }
+.btn-danger { background: #b5534f; }
+.section-divider { border: none; border-top: 1px solid var(--border); margin: 1.5rem 0; }
+.summary { font-size: .9rem; margin-bottom: 1rem; }
+.notice { border-radius: 6px; padding: .6rem .8rem; margin-bottom: 1rem; font-size: .85rem; }
+.notice-ok { background: rgba(128,192,128,.10); border: 1px solid #80c080; color: #c0e0c0; }
+.notice-bad { background: rgba(208,106,106,.12); border: 1px solid #d06a6a; color: #f0b0b0; }
+.notice ul { margin: .4rem 0 0 1.2rem; font-size: .8rem; word-break: break-all; }
+.group { background: var(--surface); border: 1px solid var(--border); border-radius: 8px; padding: .75rem; margin-bottom: .75rem; display: flex; gap: .9rem; }
+.group img, .group .noimg { width: 72px; height: 72px; border-radius: 6px; object-fit: cover; flex-shrink: 0; background: var(--bg); }
+.group-body { flex: 1; min-width: 0; }
+.group-head { font-size: .9rem; font-weight: 600; margin-bottom: .4rem; }
+.group-head span { color: var(--muted); font-weight: 400; font-size: .8rem; }
+.copy { display: flex; align-items: flex-start; gap: .5rem; padding: .3rem 0; font-size: .82rem; border-top: 1px solid var(--border); cursor: pointer; }
+.copy:first-of-type { border-top: none; }
+.copy input { accent-color: #b5534f; margin-top: .2rem; flex-shrink: 0; }
+.copy-path { flex: 1; min-width: 0; word-break: break-all; }
+.copy-path .dir { color: var(--muted); }
+.copy-meta { color: var(--muted); font-size: .75rem; white-space: nowrap; }
+.tag { font-size: .7rem; padding: .05rem .4rem; border-radius: 4px; margin-left: .3rem; }
+.tag-keep { background: rgba(128,192,128,.15); color: #a0d0a0; }
+.tag-proj { background: rgba(108,99,255,.18); color: #b8b3ff; }
+.copy.doomed .copy-path { text-decoration: line-through; text-decoration-color: rgba(208,106,106,.6); }
+.empty { color: var(--muted); padding: 1rem 0; font-size: .9rem; }
+.sticky { position: sticky; bottom: 0; background: var(--bg); padding: .75rem 0; border-top: 1px solid var(--border); display: flex; gap: .75rem; align-items: center; flex-wrap: wrap; font-size: .85rem; }
+.htmx-indicator { display: none; }
+.htmx-request .htmx-indicator, .htmx-request.htmx-indicator { display: inline; }
+@media (max-width: 520px) { .group img, .group .noimg { width: 48px; height: 48px; } .copy { flex-wrap: wrap; } .copy-meta { white-space: normal; } }
+.scan-report { font-size: .85rem; line-height: 1.5; }
+.sr-line { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; margin-bottom: .6rem; }
+.sr-muted { color: var(--muted); }
+.sr-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+.sr-ok { background: #80c080; } .sr-warn { background: #d9a35b; } .sr-bad { background: #d06a6a; }
+.sr-busy { background: var(--accent); animation: sr-pulse 1s ease-in-out infinite alternate; }
+@keyframes sr-pulse { from { opacity: .35; } to { opacity: 1; } }
+.sr-bar { height: 6px; background: var(--surface); border: 1px solid var(--border); border-radius: 4px; overflow: hidden; }
+.sr-bar > div { height: 100%; background: var(--accent); transition: width .5s; }
+.sr-error, .sr-warning { border-radius: 6px; padding: .6rem .8rem; margin: .5rem 0; }
+.sr-error { background: rgba(208,106,106,.12); border: 1px solid #d06a6a; color: #f0b0b0; }
+.sr-warning { background: rgba(217,163,91,.10); border: 1px solid #d9a35b; color: #f0d0a0; }
+.sr-bad-text { color: #f0b0b0; }
+table.sr-stats { border-collapse: collapse; margin: .25rem 0 .5rem; width: 100%; }
+table.sr-stats th { text-align: left; font-weight: 400; color: var(--muted); padding: .2rem .75rem .2rem 0; white-space: nowrap; }
+table.sr-stats td { padding: .2rem 1.5rem .2rem 0; font-variant-numeric: tabular-nums; }
+@media (max-width: 520px) { table.sr-stats th, table.sr-stats td { display: block; padding: 0; } table.sr-stats td { margin-bottom: .35rem; } }
+.sr-details { margin: .5rem 0; } .sr-details summary { cursor: pointer; color: #f0d0a0; }
+</style>
+</head>
+<body>
+<header>
+  <h1>ORG3D</h1>
+  <a href="/">Gallery</a>
+  <a href="/projects">Projects</a>
+  <a href="/settings">Settings</a>
+</header>
+
+<div class="page">
+  <h2>Duplicates</h2>
+  <p class="intro">
+    Finds files with exactly the same contents. Only files that share a size with another file are read,
+    and each is read once: later runs only read new or changed files. The first run may wake array disks.
+    Selected copies are moved to <code>{{ trash_dir }}</code> at the top of the library, not deleted;
+    empty that folder yourself when you're sure. The copy you keep takes over the project and thumbnail.
+  </p>
+  <div class="actions">
+    <button class="btn" hx-post="/api/duplicates/scan" hx-target="#find-msg" hx-swap="innerHTML">Find duplicates</button>
+    <span id="find-msg"></span>
+  </div>
+  {% with scanning = scan.scanning, progress = scan.progress, report = scan.report %}
+  {% include "scan_report.html" %}
+  {% endwith %}
+
+  <hr class="section-divider">
+
+  {% include "dupe_groups.html" %}
+</div>
+
+<script>
+// Strike through copies that are selected for the trash.
+document.body.addEventListener('change', e => {
+  if (e.target.matches('.copy input')) e.target.closest('.copy').classList.toggle('doomed', e.target.checked);
+});
+</script>
+</body>
+</html>
