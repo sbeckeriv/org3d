@@ -36,6 +36,7 @@
     <tr><th>Purged</th><td>{{ s.purged }}</td>
         <th>Errors</th><td class="{{ 'sr-bad-text' if s.errors or s.walk_errors }}">{{ s.errors + s.walk_errors }}</td></tr>
   </table>
+  {% if s.junk_removed %}<p class="sr-line sr-muted">Removed {{ s.junk_removed }} hidden or macOS metadata file{{ "s" if s.junk_removed != 1 }} (<code>._*</code>, <code>__MACOSX</code>) from the index; they aren't models.</p>{% endif %}
   {% for w in s.warnings %}
   <p class="sr-warning">{{ w }}</p>
   {% endfor %}

@@ -96,6 +96,8 @@ pub struct ScanStats {
     pub missing: usize,
     /// Rows deleted after being missing past the grace period.
     pub purged: usize,
+    /// Rows removed because the file is now ignored (e.g. macOS `._*`).
+    pub junk_removed: usize,
     /// Files that couldn't be parsed/indexed.
     pub errors: usize,
     /// Directory entries the walk couldn't read (permissions, I/O errors).
@@ -184,12 +186,38 @@ pub fn scan_with(
         });
     }
 
-    let known = db::known_files(conn)?;
+    let mut known = db::known_files(conn)?;
     let mut stats = ScanStats {
         scanned: found.len(),
         walk_errors,
         ..Default::default()
     };
+
+    // Rows for files we now ignore (macOS `._*` metadata etc.) were never
+    // real models: drop them outright instead of soft-deleting, so they don't
+    // trip the mass-missing guard or linger for the purge grace period.
+    let junk: Vec<String> = known
+        .keys()
+        .filter(|p| {
+            let p = Path::new(p.as_str());
+            p.starts_with(root) && crate::dupes::is_ignored_path(root, p)
+        })
+        .cloned()
+        .collect();
+    if !junk.is_empty() {
+        conn.execute_batch("BEGIN")?;
+        for p in &junk {
+            let k = known.remove(p).expect("junk key from known");
+            conn.execute("DELETE FROM models WHERE id = ?1", [k.id])?;
+            remove_thumbnail(thumb_dir, k.thumbnail_path.as_deref());
+        }
+        conn.execute_batch("COMMIT")?;
+        stats.junk_removed = junk.len();
+        tracing::info!(
+            "removed {} ignored files (hidden / macOS metadata) from the index",
+            junk.len()
+        );
+    }
     if let Some(p) = &opts.progress {
         p.total.store(found.len(), Ordering::Relaxed);
     }

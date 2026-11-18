@@ -211,3 +211,51 @@ fn purge_removes_rows_missing_past_grace_period() {
     assert_eq!(l.scan().purged, 1);
     assert_eq!(db::count_all(&l.conn).unwrap(), 2);
 }
+
+#[test]
+fn macos_metadata_files_are_ignored_and_old_rows_dropped() {
+    let l = lib();
+    write_stl(&l.root.join("a/cube.stl"), 1);
+    // AppleDouble twins and a zip-made __MACOSX folder: never models.
+    std::fs::write(l.root.join("a/._cube.stl"), vec![0u8; 4096]).unwrap();
+    std::fs::write(l.root.join("a/._wall.stl"), vec![0u8; 4096]).unwrap();
+    write_stl(&l.root.join("__MACOSX/a/cube.stl"), 1);
+
+    // Simulate rows indexed by an older version that didn't skip them.
+    for name in ["._cube.stl", "._wall.stl"] {
+        let path = l.root.join("a").join(name);
+        db::upsert(
+            &l.conn,
+            &db::ModelRow {
+                id: 0,
+                path: path.to_string_lossy().into_owned(),
+                filename: name.into(),
+                folder: "a".into(),
+                format: "STL".into(),
+                file_size: 4096,
+                title: None,
+                designer: None,
+                description: None,
+                application: None,
+                license: None,
+                created_at: None,
+                object_count: None,
+                triangle_count: None,
+                dim_x: None,
+                dim_y: None,
+                dim_z: None,
+                thumbnail_path: None,
+                project_id: None,
+                mtime: Some(1),
+            },
+        )
+        .unwrap();
+    }
+
+    let s = l.scan();
+    assert_eq!(s.scanned, 1, "only the real model is found");
+    assert_eq!(s.junk_removed, 2);
+    assert_eq!(s.missing, 0, "junk is dropped, not soft-deleted");
+    assert!(s.warnings.is_empty(), "{:?}", s.warnings);
+    assert_eq!(db::count_all(&l.conn).unwrap(), 1);
+}

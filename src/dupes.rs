@@ -21,15 +21,24 @@ use crate::scanner::ScanProgress;
 /// The scanner and extractor never descend into it.
 pub const TRASH_DIR: &str = ".org3d-trash";
 
-/// Directories org3d creates inside the library and must never index.
-pub fn is_internal_dir(name: &std::ffi::OsStr) -> bool {
-    let name = name.to_string_lossy();
-    name == TRASH_DIR || name.ends_with(".org3d-partial")
+/// Names org3d never indexes or extracts: hidden files and folders (macOS
+/// `._*` AppleDouble metadata, `.DS_Store`, `.Trashes`, our own
+/// `.org3d-trash` and `.*.org3d-partial`) and zip-made `__MACOSX` folders.
+pub fn is_ignored_name(name: &str) -> bool {
+    name.starts_with('.') || name == "__MACOSX"
 }
 
-/// walkdir filter: skip our own trash and partial-extract folders.
+/// True if any component of `path` below `root` is ignored.
+pub fn is_ignored_path(root: &Path, path: &Path) -> bool {
+    path.strip_prefix(root)
+        .unwrap_or(path)
+        .components()
+        .any(|c| is_ignored_name(&c.as_os_str().to_string_lossy()))
+}
+
+/// walkdir filter: skip ignored files and don't descend into ignored folders.
 pub fn walk_filter(e: &walkdir::DirEntry) -> bool {
-    !(e.depth() > 0 && e.file_type().is_dir() && is_internal_dir(e.file_name()))
+    e.depth() == 0 || !is_ignored_name(&e.file_name().to_string_lossy())
 }
 
 const MAX_FAILED_LISTED: usize = 50;
@@ -454,11 +463,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn internal_dirs() {
-        assert!(is_internal_dir(".org3d-trash".as_ref()));
-        assert!(is_internal_dir(".pack.org3d-partial".as_ref()));
-        assert!(!is_internal_dir("org3d-trash".as_ref()));
-        assert!(!is_internal_dir("prints".as_ref()));
+    fn ignored_names() {
+        for n in [
+            ".org3d-trash",
+            ".pack.org3d-partial",
+            "._cube.stl",
+            ".DS_Store",
+            "__MACOSX",
+        ] {
+            assert!(is_ignored_name(n), "{n}");
+        }
+        for n in ["cube.stl", "org3d-trash", "MACOSX"] {
+            assert!(!is_ignored_name(n), "{n}");
+        }
+        let root = Path::new("/lib");
+        assert!(is_ignored_path(root, Path::new("/lib/a/._b.stl")));
+        assert!(is_ignored_path(root, Path::new("/lib/__MACOSX/a/b.stl")));
+        // Only components below the root count.
+        let hidden_root = Path::new("/lib/.hidden");
+        assert!(!is_ignored_path(
+            hidden_root,
+            Path::new("/lib/.hidden/a.stl")
+        ));
+        assert!(!is_ignored_path(root, Path::new("/lib/a/b.stl")));
     }
 
     #[test]
